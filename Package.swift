@@ -20,6 +20,7 @@ let package = Package(
     targets: [
         .target(name: "HopDriver", dependencies: [
             .product(name: "Hop", package: "Hop"),
+            .product(name: "HopContract", package: "Hop"),
             .product(name: "HopBearerBle", package: "HopBearerBle"),
             .product(name: "HopBearerLan", package: "HopBearerLan"),
             .product(name: "HopBearerMultipeer", package: "HopBearerMultipeer"),

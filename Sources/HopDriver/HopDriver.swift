@@ -8,6 +8,7 @@
 
 import Foundation
 import Hop
+import HopContract
 import HopBearerBle
 import HopBearerLan
 import HopBearerMultipeer
