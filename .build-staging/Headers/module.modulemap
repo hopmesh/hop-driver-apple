@@ -1,0 +1,4 @@
+module hopFFI {
+    header "hopFFI.h"
+    export *
+}
