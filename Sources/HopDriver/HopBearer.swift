@@ -344,6 +344,9 @@ public final class HopBearer: NSObject, ObservableObject {
     private var contacts: [Data: Peer] = [:]   // app-side contact book (address → peer)
     /// Our own raw 32-byte address (for marking our own hps posts).
     public var myAddressData: Data { myAddrCache }
+    /// True once `start()` has wired the runtime (bearers up, `myAddress` published). Used by the
+    /// TEST/AUTOMATION cold-launch send to retry until the runtime is live rather than fire blind.
+    public var isReady: Bool { !myAddress.isEmpty }
     /// Contacts as a sorted list (for the invite picker).
     public var contactList: [Peer] { contacts.values.sorted { $0.name.lowercased() < $1.name.lowercased() } }
     private var userNamed = Set<Data>()        // contacts the user named (identify won't override)
@@ -1630,7 +1633,11 @@ public final class HopBearer: NSObject, ObservableObject {
         let name: String
         let rx: [Rx]
         let tx: [Tx]
+        let auto: String   // TEST/AUTOMATION breadcrumb: the raw HOP_AUTO launch env this process saw ("" if none)
     }
+    /// TEST/AUTOMATION: the HOP_AUTO launch env this process observed at init, mirrored into the dump so
+    /// the harness can confirm the env actually reached the app (vs a silent send failure). Not a user path.
+    public static var autoEnvSeen: String = ""
     static var automationFileURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("automation.json")
@@ -1647,7 +1654,8 @@ public final class HopBearer: NSObject, ObservableObject {
                               text: $0.text, delivered: $0.delivered, deliveryMs: $0.deliveryMs,
                               at: Int64($0.sentAt.timeIntervalSince1970 * 1000))
         }
-        let dump = AutomationDump(self: myAddress, name: myName, rx: Array(rx), tx: Array(tx))
+        let dump = AutomationDump(self: myAddress, name: myName, rx: Array(rx), tx: Array(tx),
+                                  auto: HopBearer.autoEnvSeen)
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(dump) else { return }
         try? data.write(to: HopBearer.automationFileURL, options: .atomic)
