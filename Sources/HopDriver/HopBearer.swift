@@ -316,16 +316,12 @@ public final class HopBearer: NSObject, ObservableObject {
     private var mcPeerByLink: [UInt64: MCPeerID] = [:]
     private var mcNextLinkId: UInt64 = 10_000   // distinct id range from BLE links
     private var wifiBlocked = false             // MC failed to start (e.g. local-network denied)
-    // Cloud relay bearer — reaches a hop-relayd over the internet (DESIGN.md §19, §21).
-    // Two flavors share one link id: raw TCP (path A, the VM) and WebSocket (path B,
-    // Cloud Run behind the global LB, wss:// terminating TLS at the balancer).
-    private var relayConn: NWConnection?
-    private var relayWS: URLSessionWebSocketTask?
+    // Cloud relay is owned ENTIRELY by the shared RelayBearer (bearers/apple/HopBearerRelay), registered
+    // in startSharedBearers(). apple-r2-01: the legacy in-driver relay dial (WS/TCP on relayLinkId 20000)
+    // was deleted. It was dead code whose only public entry (connectRelay) could open a SECOND concurrent
+    // relay socket and reintroduce the split-brain the apple-06 fix removed. `relaySession` below is kept
+    // because the direct hops:// endpoint dialer (§30) reuses one URLSession for all endpoint links.
     private var relaySession: URLSession?
-    private var relayURL: String?              // last relay endpoint (for auto check-in)
-    private var lastRelayDialMs: UInt64 = 0    // throttle background reconnect attempts
-    private var relayReconnectScheduled = false
-    private let relayLinkId: UInt64 = 20_000    // distinct id range from BLE/Wi-Fi
     // Direct WS links to hops:// endpoints (DESIGN.md §30). The client dials the endpoint at
     // wss://<domain> — it does NOT transit our relay (domain traffic stays off the fleet) — so
     // the endpoint authenticates via Noise as its HNS-published address and becomes a direct
@@ -728,6 +724,14 @@ public final class HopBearer: NSObject, ObservableObject {
 
     // MARK: - Wi-Fi (MultipeerConnectivity) bearer
 
+    // apple-r2-05: this Multipeer (Wi-Fi P2P) transport is RETAINED IN-DRIVER, on purpose. There is no
+    // "MultipeerBearer" package and it was never extracted behind the shared Bearer/LinkSink contract, so
+    // any doc/memory that calls it "the deleted MultipeerBearer" is inaccurate: MC is the one transport
+    // still minted by the driver itself (its own mcNextLinkId 10000 space + lifecycle, routed in
+    // applyOutgoing via mcPeerByLink). BLE/LAN/Relay are the extracted bearers; MC and the direct hops://
+    // endpoint links are not. Extracting MC into a HopBearerP2P package for parity is future work, not a
+    // regression, so it is left in place here.
+
     /// A random per-PROCESS Multipeer transport id, used as the MCPeerID displayName instead of the node
     /// address (apple-03). The Bonjour/AWDL display name is broadcast in cleartext to every nearby Wi-Fi
     /// observer, so it must NOT carry the stable long-term node address (that would let a passive observer
@@ -872,60 +876,6 @@ public final class HopBearer: NSObject, ObservableObject {
         relayStatus = "pin set — restart to switch relay"
     }
 
-    public func connectRelay(_ input: String) {
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
-        relayURL = trimmed   // remembered so we auto-reconnect (check-in) on drop (§28)
-        if trimmed.hasPrefix("ws://") || trimmed.hasPrefix("wss://") {
-            connectRelayWS(trimmed)
-        } else {
-            connectRelayTCP(trimmed)
-        }
-    }
-
-    /// Reconnect to the last relay after a backoff — this is the device "check-in"
-    /// (DESIGN.md §28): reconnecting to the anycast address wakes our nearest node and
-    /// pulls any pending messages. Triggered on drop and on foreground.
-    private func scheduleRelayReconnect() {
-        guard let url = relayURL, !relayReconnectScheduled else { return }
-        relayReconnectScheduled = true
-        let delay = 5.0 + Double.random(in: 0...3)   // small backoff + jitter
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self else { return }
-            self.relayReconnectScheduled = false
-            // Only reconnect if we're not already connected.
-            if self.relayStatus != "connected" { self.connectRelay(url) }
-        }
-    }
-
-    /// WebSocket bearer: each link packet is one binary frame (no length framing — WS
-    /// supplies it). The LB terminates TLS, so `wss://relay.hopme.sh/` reaches `ws://`
-    /// inside the container.
-    private func connectRelayWS(_ urlStr: String) {
-        guard let url = URL(string: urlStr) else { relayStatus = "bad url"; return }
-        relayConn?.cancel(); relayConn = nil
-        relayWS?.cancel(with: .goingAway, reason: nil)
-        let session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
-        relaySession = session
-        let task = session.webSocketTask(with: url)
-        relayWS = task
-        relayStatus = "connecting…"
-        task.resume()   // node.connected fires on didOpenWithProtocol
-    }
-
-    private func receiveRelayWS() {
-        relayWS?.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let message):
-                if case .data(let d) = message { self.deliver(link: self.relayLinkId, bytes: d) }
-                self.receiveRelayWS()
-            case .failure:
-                self.onMain { self.relayStatus = "disconnected" }
-                self.linkDown(self.relayLinkId)
-            }
-        }
-    }
-
     /// Open (or reuse) a direct WS link to a hops:// endpoint at `wss://<domain>/` (DESIGN.md
     /// §30). The endpoint authenticates via Noise as its HNS-published address, becoming a
     /// direct peer; the sealed hops request then delivers straight to it. Returns the link id.
@@ -963,73 +913,6 @@ public final class HopBearer: NSObject, ObservableObject {
         endpointWS.first(where: { $0.value === task })?.key
     }
 
-    /// Connect to a `hop-relayd` at `host:port` over TCP. Framing matches the daemon
-    /// (4-byte big-endian length prefix).
-    private func connectRelayTCP(_ hostPort: String) {
-        let parts = hostPort.split(separator: ":")
-        guard parts.count == 2, let port = NWEndpoint.Port(String(parts[1])) else {
-            relayStatus = "bad address"; return
-        }
-        relayWS?.cancel(with: .goingAway, reason: nil); relayWS = nil
-        relayConn?.cancel()
-        let conn = NWConnection(host: NWEndpoint.Host(String(parts[0])), port: port, using: .tcp)
-        relayConn = conn
-        let link = relayLinkId
-        relayStatus = "connecting…"
-        conn.stateUpdateHandler = { [weak self] state in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch state {
-                case .ready:
-                    self.relayStatus = "connected"
-                    self.receiveRelayFrame(conn, link: link)
-                    self.linkUp(link, initiator: true)
-                case .failed(let e):
-                    self.relayStatus = "failed: \(e.localizedDescription)"
-                    self.linkDown(link)
-                case .cancelled:
-                    self.relayStatus = "disconnected"
-                    self.linkDown(link)
-                default: break
-                }
-            }
-        }
-        conn.start(queue: .main)
-    }
-
-    private func receiveRelayFrame(_ conn: NWConnection, link: UInt64) {
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] hdr, _, done, err in
-            guard let self else { return }
-            guard let hdr, hdr.count == 4, err == nil else {
-                if done || err != nil { self.linkDown(link) }
-                return
-            }
-            let b = [UInt8](hdr)
-            let n = Int(b[0]) << 24 | Int(b[1]) << 16 | Int(b[2]) << 8 | Int(b[3])
-            guard n > 0, n <= 1 << 20 else { return }
-            conn.receive(minimumIncompleteLength: n, maximumLength: n) { [weak self] payload, _, done2, err2 in
-                guard let self else { return }
-                if let payload, payload.count == n {
-                    self.deliver(link: link, bytes: payload)
-                    self.receiveRelayFrame(conn, link: link)
-                } else if done2 || err2 != nil {
-                    self.linkDown(link)
-                }
-            }
-        }
-    }
-
-    private func relaySend(_ bytes: Data) {
-        if let ws = relayWS {
-            ws.send(.data(bytes)) { _ in }   // one link packet = one WS binary frame
-            return
-        }
-        var len = UInt32(bytes.count).bigEndian
-        var frame = Data(bytes: &len, count: 4)
-        frame.append(bytes)
-        relayConn?.send(content: frame, completion: .contentProcessed { _ in })
-    }
-
     // MARK: - plumbing
 
     /// Drain ALL node outputs on `core` (the only queue allowed to touch `node`), then apply the
@@ -1064,15 +947,14 @@ public final class HopBearer: NSObject, ObservableObject {
 
     /// Route outgoing packets to their link (main). The shared BearerManager owns BLE + LAN + relay;
     /// Multipeer and the direct hops:// endpoint links are the only transports the driver still mints
-    /// itself. The legacy relay dial (via `setPinnedRelay`) also serves `relayLinkId` for runtime re-pin.
+    /// itself. (apple-r2-01: the legacy in-driver relay dial on relayLinkId was deleted; relay is the
+    /// shared RelayBearer only.)
     private func applyOutgoing(_ outgoing: [OutPacket]) {
         for pkt in outgoing {
             if bearerLinksContains(pkt.link) {              // shared BearerManager (BLE + LAN + relay) owns it
                 bearerMgr.send(pkt.bytes, on: pkt.link)
             } else if let peer = mcPeerByLink[pkt.link] {
                 try? mcSession?.send(pkt.bytes, toPeers: [peer], with: .reliable) // Wi-Fi (Multipeer) link
-            } else if pkt.link == relayLinkId {
-                relaySend(pkt.bytes)                       // legacy relay dial (runtime re-pin via setPinnedRelay)
             } else if let ws = endpointWS[pkt.link] {
                 ws.send(.data(pkt.bytes)) { _ in }         // direct hops:// endpoint link (§30)
             }
@@ -1251,16 +1133,33 @@ public final class HopBearer: NSObject, ObservableObject {
         pump()
     }
 
-    /// Discover same-app topics on the mesh (decrypted descriptors). Synchronous UI read.
-    public func hpsBrowse() -> [HpsTopicInfo] { core.sync { node.browseDiscoverable() } }
+    /// Discover same-app topics on the mesh (decrypted descriptors). apple-r2-04: fetched OFF the main
+    /// thread (the Browse tab called this from onAppear/onChange/Refresh, and a `core.sync` from main
+    /// blocks the UI behind whatever is queued on the core serial queue, e.g. a packet drain / message
+    /// seal, so the Browse tab hitched under load). Same async-snapshot shape as `hpsHostSnapshot`: read
+    /// once on the core queue, deliver the result on main.
+    public func hpsBrowse(_ completion: @escaping ([HpsTopicInfo]) -> Void) {
+        core.async { [weak self] in
+            guard let self else { return }
+            let found = self.node.browseDiscoverable()
+            DispatchQueue.main.async { completion(found) }
+        }
+    }
 
     /// Rebuild the channel list from the node's persisted topics (hosted + subscribed) at startup.
+    /// apple-r2-04: reads on the core queue and applies to `hpsTopics` (a main-thread @Published) back on
+    /// main, so startup never blocks the main thread behind the core serial queue.
     private func loadHpsTopics() {
-        let mine = core.sync { node.hpsMyTopics() }
-        for t in mine {
-            let topic = HpsTopic(host: t.host, path: t.path, isChannel: t.kind == .channel,
-                                 hosting: t.hosting, access: t.access)
-            if !hpsTopics.contains(where: { $0.id == topic.id }) { hpsTopics.append(topic) }
+        core.async { [weak self] in
+            guard let self else { return }
+            let mine = self.node.hpsMyTopics()
+            DispatchQueue.main.async {
+                for t in mine {
+                    let topic = HpsTopic(host: t.host, path: t.path, isChannel: t.kind == .channel,
+                                         hosting: t.hosting, access: t.access)
+                    if !self.hpsTopics.contains(where: { $0.id == topic.id }) { self.hpsTopics.append(topic) }
+                }
+            }
         }
     }
 
@@ -1651,6 +1550,18 @@ public final class HopBearer: NSObject, ObservableObject {
         var bundleId: Data?
     }
 
+    /// apple-r2-03: the write options for the plaintext UI-history mirrors (messages/channels/contacts).
+    /// These are appended to on an INBOUND receive, which can happen while the device is LOCKED in the
+    /// background (background BLE/relay wake). `.completeFileProtection` DENIES writes while locked, so a
+    /// locked background receive would fail to persist and, since `takeInbox` already drained the node
+    /// inbox into the in-memory array, the message could vanish from the UI on the next relaunch (a
+    /// user-visible history gap; the SQLCipher node store still has it, but the chat list reads this
+    /// mirror). `.completeFileProtectionUntilFirstUserAuthentication` (the `Data.WritingOptions` spelling
+    /// of NSFileProtectionCompleteUntilFirstUserAuthentication) keeps the bytes encrypted at rest yet lets
+    /// the write SUCCEED any time after the first post-boot unlock, so a locked background receive
+    /// persists. The node store (hop.db) remains the source of truth; this only closes the mirror gap.
+    static let uiMirrorProtection: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+
     private static var messagesFileURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("messages.json")
@@ -1678,10 +1589,11 @@ public final class HopBearer: NSObject, ObservableObject {
                           bundleId: $0.bundleId)
         }
         guard let data = try? JSONEncoder().encode(stored) else { return }
-        // apple-04: .completeFileProtection encrypts this history at rest (keyed to the device passcode)
-        // so plaintext chat + image bytes don't sit unprotected beside the SQLCipher hop.db or leak via a
-        // device backup. No-op on macOS (no data protection), effective on iOS.
-        try? data.write(to: HopBearer.messagesFileURL, options: [.atomic, .completeFileProtection])
+        // apple-04/apple-r2-03: encrypt this history at rest (so plaintext chat + image bytes don't sit
+        // unprotected beside the SQLCipher hop.db or leak via a device backup), but with
+        // completeFileProtectionUntilFirstUnlock so a locked background receive can still persist (see
+        // uiMirrorProtection). No-op on macOS (no data protection), effective on iOS.
+        try? data.write(to: HopBearer.messagesFileURL, options: HopBearer.uiMirrorProtection)
         writeAutomationDump()   // TEST/AUTOMATION: mirror self-addr + rx/tx for the headless harness
     }
 
@@ -1707,16 +1619,22 @@ public final class HopBearer: NSObject, ObservableObject {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("automation.json")
     }
-    /// apple-04: the automation mirror is a PLAINTEXT dump of self-address + recent messages, which
-    /// defeats SQLCipher-at-rest if it ships. It exists ONLY for the headless test harness, so it is
-    /// written ONLY in DEBUG builds or when the process was launched under the harness (a HOP_AUTO env,
-    /// which real users never set). Release builds with no harness env never touch automation.json.
+    /// apple-04/apple-r2-03: the plaintext-mirror GATE, pure + testable. A plaintext automation.json (self
+    /// address + recent messages) defeats SQLCipher-at-rest if it ships, so it is written ONLY when this is
+    /// a DEBUG build OR the process was launched under the harness (a HOP_AUTO env real users never set).
+    /// The critical invariant, which the test pins: a RELEASE build with no HOP_AUTO returns false, so the
+    /// mirror is NEVER written in a shipped app.
+    static func automationMirrorEnabled(isDebug: Bool, hopAutoEnv: String?) -> Bool {
+        return isDebug || (hopAutoEnv != nil)
+    }
     static var automationMirrorEnabled: Bool {
         #if DEBUG
-        return true
+        let isDebug = true
         #else
-        return ProcessInfo.processInfo.environment["HOP_AUTO"] != nil
+        let isDebug = false
         #endif
+        return automationMirrorEnabled(isDebug: isDebug,
+                                       hopAutoEnv: ProcessInfo.processInfo.environment["HOP_AUTO"])
     }
     /// Rewrite the automation mirror (last ~100 rx + tx). Called on every message change (from
     /// `saveMessages`) and once at startup so `self` is discoverable even before any traffic.
@@ -1749,7 +1667,7 @@ public final class HopBearer: NSObject, ObservableObject {
         channelSaveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let data = try? JSONEncoder().encode(self.hpsThreads) else { return }
-            try? data.write(to: HopBearer.channelsFileURL, options: [.atomic, .completeFileProtection])  // apple-04
+            try? data.write(to: HopBearer.channelsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
         }
         channelSaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
@@ -1806,7 +1724,7 @@ public final class HopBearer: NSObject, ObservableObject {
         }
         DispatchQueue.global(qos: .utility).async {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: HopBearer.contactsFileURL, options: [.atomic, .completeFileProtection])  // apple-04
+            try? data.write(to: HopBearer.contactsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
         }
     }
     private func loadContacts() {
@@ -1978,10 +1896,16 @@ public final class HopBearer: NSObject, ObservableObject {
             return p
         }
 
-        // Connected cloud relays (the relay-link range 20_000–29_999), named by their region
-        // domain via hop.identify (§29). Endpoints (≥30_000) are NOT relays — they're dialed
-        // directly and never join the backbone (§30) — so they're listed separately below.
-        relays = pls.filter { (20_000..<30_000).contains($0.link) }.map { pl in
+        // Connected cloud relays, named by their region domain via hop.identify (§29). apple-r2-01: the
+        // relay is now the SHARED RelayBearer (its link surfaces via the BearerManager with transportName
+        // "Relay", link id 1_000_000+), NOT the deleted legacy 20_000 dial. So classify by the bearer's
+        // real transport tag; fall back to the legacy 20_000..<30_000 range only for any node-minted relay
+        // link (there are none after the cutover, kept for safety). Endpoints (30_000+) are dialed directly
+        // and never join the backbone (§30), so they're listed separately below.
+        relays = pls.filter { pl in
+            if bearerLinksContains(pl.link) { return bearerMgr.transportName(of: pl.link) == "Relay" }
+            return (20_000..<30_000).contains(pl.link)
+        }.map { pl in
             let name = identities[pl.address]?.name.isEmpty == false
                 ? identities[pl.address]!.name
                 : (nameByAddr[pl.address] ?? HopBearer.shortHex(pl.address))
@@ -2144,43 +2068,27 @@ extension HopBearer: MCSessionDelegate, MCNearbyServiceAdvertiserDelegate, MCNea
 // which arms the SAME BEACON_UUID region on start and pokes its own Central.wake() on a region cross.
 // The driver keeps no CLLocationManager: monitor AND emission both live in the shared bearer.
 
-// MARK: - Cloud relay (WebSocket)
+// MARK: - Direct hops:// endpoint links (WebSocket, §30)
 
+// apple-r2-01: the cloud relay is the shared RelayBearer only; this delegate now serves ONLY the
+// direct hops:// endpoint WS links (dialEndpoint). Any task that is not a known endpoint is ignored.
 extension HopBearer: URLSessionWebSocketDelegate {
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol protocol: String?) {
         // URLSession delegate queue is `.main` (set when dialing), so this runs on main already.
-        if let id = endpointLink(for: webSocketTask) {   // a hops:// endpoint link (§30)
-            linkUp(id, initiator: true)    // dialer = Noise initiator
-            return
-        }
-        relayStatus = "connected"
-        receiveRelayWS()
-        linkUp(relayLinkId, initiator: true)   // dialer = Noise initiator
+        guard let id = endpointLink(for: webSocketTask) else { return }   // a hops:// endpoint link (§30)
+        linkUp(id, initiator: true)    // dialer = Noise initiator
     }
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        if let id = endpointLink(for: webSocketTask) {
-            endpointWS[id] = nil; linkDown(id)
-            return
-        }
-        relayStatus = "disconnected"
-        relayWS = nil
-        scheduleRelayReconnect()   // re-check-in (§28)
-        linkDown(relayLinkId)
+        guard let id = endpointLink(for: webSocketTask) else { return }
+        endpointWS[id] = nil; linkDown(id)
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let id = endpointLink(for: task) {
-            endpointWS[id] = nil; linkDown(id)
-            return
-        }
-        guard task === relayWS else { return }
-        if let error { relayStatus = "failed: \(error.localizedDescription)" }
-        relayWS = nil
-        scheduleRelayReconnect()   // re-check-in (§28)
-        linkDown(relayLinkId)
+        guard let id = endpointLink(for: task) else { return }
+        endpointWS[id] = nil; linkDown(id)
     }
 }
 
