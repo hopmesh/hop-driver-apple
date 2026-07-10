@@ -16,16 +16,18 @@ let package = Package(
         .executable(name: "relaymac", targets: ["relaymac"]),
     ],
     // The transport layer is the four INDEPENDENT bearer packages (bearers/apple/*), each binding the
-    // pure-Swift HopContract (from sdk/wrappers/Hop). The shared-bearer path (Config.useSharedBearers,
-    // default on) forms BLE+LAN links through them; the legacy in-driver HopLink/GattDataLink/LanLink
-    // remain only as a flag-off fallback (slated for removal). The old apple/HopBearers package is gone.
+    // pure-Swift HopContract (from sdk/wrappers/Hop). BLE + LAN + cloud relay links now form ONLY through
+    // those bearers via the BearerManager (there is no `Config.useSharedBearers` flag and no in-driver
+    // HopLink/GattDataLink/LanLink fallback — those were deleted in the cutover). Multipeer (Wi-Fi P2P)
+    // and the direct hops:// endpoints remain in-driver; the long-lived IOThread is retained purely as the
+    // shared BLE runloop the BleBearer schedules its L2CAP streams + timers on. The old apple/HopBearers
+    // package is gone.
     dependencies: [
         // The node API stays on UniFFI (HopFFI.xcframework). The bearers are now the INDEPENDENT
         // packages, binding HopContract (pure Swift, no libhop) — so no double-link of the Rust core.
         .package(path: "../../../sdk/wrappers/Hop"),
         .package(path: "../../../bearers/apple/HopBearerBle"),
         .package(path: "../../../bearers/apple/HopBearerLan"),
-        .package(path: "../../../bearers/apple/HopBearerMultipeer"),
         .package(path: "../../../bearers/apple/HopBearerRelay"),
     ],
     targets: [
@@ -43,16 +45,19 @@ let package = Package(
         // The bearer + transports.
         .target(name: "HopDriver", dependencies: [
             "HopFFIBindings", "HopObjC",
-            .product(name: "HopContract",        package: "Hop"),
-            .product(name: "HopBearerBle",       package: "HopBearerBle"),
-            .product(name: "HopBearerLan",       package: "HopBearerLan"),
-            .product(name: "HopBearerMultipeer", package: "HopBearerMultipeer"),
-            .product(name: "HopBearerRelay",     package: "HopBearerRelay"),
+            .product(name: "HopContract",    package: "Hop"),
+            .product(name: "HopBearerBle",   package: "HopBearerBle"),
+            .product(name: "HopBearerLan",   package: "HopBearerLan"),
+            .product(name: "HopBearerRelay", package: "HopBearerRelay"),
         ]),
 
         // Headless macOS BLE-central node driving the driver in `.centralOnly` mode.
         .executableTarget(name: "hopmac", dependencies: ["HopDriver"]),
         // Headless macOS RELAY-ONLY client (`.relayOnly` mode) — no BLE/LAN/Wi-Fi, relay path only.
         .executableTarget(name: "relaymac", dependencies: ["HopDriver"]),
+
+        // sec-priv-02: the Keychain-backed identity/db-key store, tested headlessly on macOS (the
+        // generic-password path works without a device; SE wrapping no-ops when the Enclave is absent).
+        .testTarget(name: "HopDriverTests", dependencies: ["HopDriver"]),
     ]
 )

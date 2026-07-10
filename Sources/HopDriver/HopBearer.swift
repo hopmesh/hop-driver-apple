@@ -19,43 +19,37 @@ import HopBearerRelay
 import UIKit
 #endif
 
-/// The Hop identity secret is derived **deterministically from the device's vendor
-/// id** — so the keypair (and thus the address) is identical every launch *by
-/// construction*, with no dependency on Keychain/file storage (which proved
-/// unreliable on dev-installed builds, wiping the address on reinstall). The secret
-/// is the keypair is the address; re-deriving the same seed keeps the node routeable.
-/// `note` is shown in the UI for transparency.
+/// The Hop identity secret is a **random 32-byte value generated once and kept in the device
+/// Keychain** (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, non-syncable, SE-wrapped where
+/// available) — see `HopKeychain` and sec-priv-02. The secret is the keypair is the address, so
+/// reading the same Keychain value back every launch keeps the node routeable.
+///
+/// This replaces the old `SHA-256(identifierForVendor)` derivation, which gave the long-term
+/// identity only the entropy of a NON-secret device id (readable by any in-sandbox code, backups,
+/// or forensics) and made the db key derivable the same way. The Keychain value is a real secret
+/// that never leaves the device. `note` is shown in the UI for transparency.
+///
+/// Migration: the legacy value was deterministic and unrecoverable as a random secret, so the first
+/// launch after this change generates fresh secrets — a ONE-TIME identity reset (new address) and a
+/// fresh db key. Every launch after that is stable from the Keychain.
 public enum IdentityStore {
     public static var note = "init"
 
-    /// A 32-byte Ed25519 seed from the vendor id (stable across launches/reinstall,
-    /// until every app from this vendor is removed).
+    /// The 32-byte Ed25519 identity seed. Random, stored once in the Keychain, stable across launches
+    /// (and reboots after first unlock). Not derivable from any non-secret device attribute.
     public static func deviceSeed() -> Data {
-        #if canImport(UIKit)
-        let vid = UIDevice.current.identifierForVendor?.uuidString
-        #else
-        let vid: String? = nil
-        #endif
-        note = vid != nil ? "device-derived" : "random (no vendor id)"
-        let basis = vid ?? UUID().uuidString
-        return Data(SHA256.hash(data: Data("hop.identity.v1|\(basis)".utf8)))
+        let r = HopKeychain.secret(account: HopKeychain.identityAccount)
+        note = "identity: \(r.origin.rawValue)"
+        return r.bytes
     }
 
-    /// The 32-byte SQLCipher key for the on-device `hop.db` (F-25). Derived from the SAME vendor-id
-    /// basis as the identity, but domain-separated, so it is: (a) stable every launch with no storage
-    /// to fail, (b) tied to identity lifetime — a full vendor reinstall resets identity AND the db key
-    /// together (a fresh install starts clean either way), and (c) NOT present in the db file, so a
-    /// pulled/backed-up `hop.db` is useless without the device. A random key in the Secure Enclave /
-    /// Keychain is the stronger upgrade; it's avoided here for the same reinstall-wipe reliability
-    /// reason the identity seed avoids Keychain. Only active when libhop is built `--features sqlcipher`.
+    /// The 32-byte SQLCipher key for the on-device `hop.db` (F-25). Random, stored once in the
+    /// Keychain (distinct account from the identity), so it is: (a) stable every launch, (b) a real
+    /// secret that is NOT derivable from the vendor id, and (c) NOT present in the db file — a pulled
+    /// or backed-up `hop.db` is useless without the device's Keychain. Only encrypts when libhop is
+    /// built `--features sqlcipher` (otherwise the key is accepted but the db stays plain).
     public static func dbKey() -> Data {
-        #if canImport(UIKit)
-        let vid = UIDevice.current.identifierForVendor?.uuidString
-        #else
-        let vid: String? = nil
-        #endif
-        let basis = vid ?? UUID().uuidString
-        return Data(SHA256.hash(data: Data("hop.db.key.v1|\(basis)".utf8)))
+        HopKeychain.secret(account: HopKeychain.dbKeyAccount).bytes
     }
 }
 
@@ -231,6 +225,9 @@ public final class HopBearer: NSObject, ObservableObject {
         didSet {
             UserDefaults.standard.set(privateMode, forKey: "hop.privateMode")
             if privateMode { retractPresence() } else { publishPresence() }
+            // apple-03: also (un)advertise the Wi-Fi (Multipeer) bearer so private mode actually stops
+            // broadcasting on every transport, not just the relay presence.
+            if privateMode { mcAdvertiser?.stopAdvertisingPeer() } else { mcAdvertiser?.startAdvertisingPeer() }
         }
     }
     @Published public var idNote = ""   // identity persistence outcome (diagnostic)
@@ -727,24 +724,34 @@ public final class HopBearer: NSObject, ObservableObject {
 
     // MARK: - Wi-Fi (MultipeerConnectivity) bearer
 
+    /// A random per-PROCESS Multipeer transport id, used as the MCPeerID displayName instead of the node
+    /// address (apple-03). The Bonjour/AWDL display name is broadcast in cleartext to every nearby Wi-Fi
+    /// observer, so it must NOT carry the stable long-term node address (that would let a passive observer
+    /// harvest + correlate the device across locations, defeating §39 untraceable-by-default). The
+    /// displayName is only used for the lexicographic initiator/responder tiebreak below; a random hex id
+    /// preserves that. Node identity is still negotiated over Noise on the link, exactly like BLE.
+    private let mcTransportId: String = HopContract.hex(HopContract.randomNodeId())
+
     /// Stand up the Wi-Fi bearer: advertise + browse for nearby Hop peers and shuttle
     /// the node's frames over a `MCSession`, exactly like the BLE bearer but a
     /// different medium (DESIGN.md §26). Encryption is left to Hop's Noise layer.
     private func startWiFi() {
-        let pid = MCPeerID(displayName: String(myAddress.prefix(60)))
+        let pid = MCPeerID(displayName: mcTransportId)   // apple-03: random transport id, NOT the address
         mcPeerID = pid
         let session = MCSession(peer: pid, securityIdentity: nil, encryptionPreference: .none)
         session.delegate = self
         mcSession = session
         let adv = MCNearbyServiceAdvertiser(peer: pid, discoveryInfo: nil, serviceType: HopBearer.mcServiceType)
         adv.delegate = self
-        adv.startAdvertisingPeer()
+        // apple-03: private mode means "do not broadcast presence". Browse (so we can still reach peers who
+        // advertise) but do NOT advertise ourselves, matching retractPresence's contract for the relay path.
+        if !privateMode { adv.startAdvertisingPeer() }
         mcAdvertiser = adv
         let br = MCNearbyServiceBrowser(peer: pid, serviceType: HopBearer.mcServiceType)
         br.delegate = self
         br.startBrowsingForPeers()
         mcBrowser = br
-        NSLog("HOPLOG wifi start: \(pid.displayName)")
+        NSLog("HOPLOG wifi start: \(pid.displayName) private=\(privateMode)")
     }
 
     /// Re-attempt advertise/browse and clear any blocked state. Called on foreground —
@@ -754,9 +761,9 @@ public final class HopBearer: NSObject, ObservableObject {
         wifiBlocked = false
         mcAdvertiser?.stopAdvertisingPeer()
         mcBrowser?.stopBrowsingForPeers()
-        mcAdvertiser?.startAdvertisingPeer()
+        if !privateMode { mcAdvertiser?.startAdvertisingPeer() }   // apple-03: honor private mode
         mcBrowser?.startBrowsingForPeers()
-        NSLog("HOPLOG wifi restart")
+        NSLog("HOPLOG wifi restart private=\(privateMode)")
     }
 
     // NOTE: The legacy in-driver LAN transport (a Bonjour `_hoplan._tcp` listener + browser + LanLink)
@@ -805,8 +812,18 @@ public final class HopBearer: NSObject, ObservableObject {
 
     /// Shared-bearer link up: record the id (so `applyOutgoing` routes it), then drive the node's Noise
     /// handshake through the existing seam (dialer → initiator). Called on the bearer's work queue.
+    /// apple-06: the global link id of the live shared RelayBearer link (nil when the relay is down), so
+    /// the UI's `relayStatus` tracks the REAL shared relay socket instead of the never-invoked legacy
+    /// WS/TCP path. Read/written on the bearer work queue + main; touched under `bearerLinksLock`.
+    private var relayBearerLinkId: UInt64?
+
     fileprivate func bearerLinkUp(_ id: UInt64, role: HopRole) {
         bearerLinksLock.lock(); bearerLinks.insert(id); bearerLinksLock.unlock()
+        // apple-06: drive the UI relayStatus from the shared RelayBearer, not the legacy path.
+        if bearerMgr.transportName(of: id) == "Relay" {
+            bearerLinksLock.lock(); relayBearerLinkId = id; bearerLinksLock.unlock()
+            onMain { [weak self] in self?.relayStatus = "connected" }
+        }
         linkUp(id, initiator: role == .dialer)
     }
 
@@ -817,7 +834,14 @@ public final class HopBearer: NSObject, ObservableObject {
 
     /// Shared-bearer link down: forget the id, then tell the node through the existing seam.
     fileprivate func bearerLinkDown(_ id: UInt64) {
-        bearerLinksLock.lock(); bearerLinks.remove(id); bearerLinksLock.unlock()
+        bearerLinksLock.lock()
+        bearerLinks.remove(id)
+        let wasRelay = (relayBearerLinkId == id)
+        if wasRelay { relayBearerLinkId = nil }
+        bearerLinksLock.unlock()
+        // apple-06: the shared RelayBearer reconnects with backoff, so its socket dropping means the UI
+        // relay indicator should reflect "reconnecting" until the next linkUp, not stay green.
+        if wasRelay { onMain { [weak self] in self?.relayStatus = "reconnecting…" } }
         linkDown(id)
     }
 
@@ -836,7 +860,12 @@ public final class HopBearer: NSObject, ObservableObject {
         pinnedRelay = pinned
         if let pinned { UserDefaults.standard.set(pinned, forKey: "hop.pinnedRelay") }
         else { UserDefaults.standard.removeObject(forKey: "hop.pinnedRelay") }
-        connectRelay(pinned ?? HopBearer.defaultRelay)   // connectRelay tears down the old link first
+        // apple-06: the ACTIVE relay is the shared RelayBearer (registered with `pinnedRelay ?? default`
+        // at startup). Dialing the legacy connectRelay path here opened a SECOND concurrent relay link to
+        // a different relay while the shared bearer kept its original socket (split-brain: duplicated
+        // presence/traffic, confounded relay tests). The shared BearerManager has no live re-register, so
+        // the pin is persisted and takes effect on next start; we do NOT open the legacy link.
+        relayStatus = "pin set — restart to switch relay"
     }
 
     public func connectRelay(_ input: String) {
@@ -1172,6 +1201,35 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Host: reach (unique acking members) + the retained-member set. Synchronous UI reads.
     public func hpsReach(_ topic: HpsTopic) -> Int { core.sync { Int(node.hpsReach(path: topic.path)) } }
     public func hpsMembers(_ topic: HpsTopic) -> [Data] { core.sync { node.hpsMembers(path: topic.path) } }
+
+    /// apple-10: a snapshot of a hosted topic's reach + pending join-requests + members, fetched OFF
+    /// the SwiftUI render path. The three underlying node reads run once on the core queue and the
+    /// result is delivered on main, so the channel-info sheet never does a `core.sync` inside its body
+    /// (which blocked the main thread behind the packet drain and re-created the 0x8BADF00D class of
+    /// stall under core congestion). Callers hold the result in @State and re-fetch on appear / after
+    /// a mutating action.
+    public struct HpsHostSnapshot: Equatable {
+        public var reach: Int = 0
+        public var pending: [Data] = []
+        public var members: [Data] = []
+        // Swift's synthesized memberwise init is internal even on a public struct, so the app module
+        // (ContentView, apple-10 off-core-queue snapshot) could not construct it. Expose a public one.
+        public init(reach: Int = 0, pending: [Data] = [], members: [Data] = []) {
+            self.reach = reach
+            self.pending = pending
+            self.members = members
+        }
+    }
+    public func hpsHostSnapshot(_ topic: HpsTopic, _ completion: @escaping (HpsHostSnapshot) -> Void) {
+        let path = topic.path
+        core.async { [weak self] in
+            guard let self else { return }
+            let snap = HpsHostSnapshot(reach: Int(self.node.hpsReach(path: path)),
+                                       pending: self.node.hpsPending(path: path),
+                                       members: self.node.hpsMembers(path: path))
+            DispatchQueue.main.async { completion(snap) }
+        }
+    }
     /// Host: rotate keys, optionally removing members (revocation).
     public func hpsRekey(_ topic: HpsTopic, remove: [Data] = []) {
         let path = topic.path
@@ -1616,7 +1674,10 @@ public final class HopBearer: NSObject, ObservableObject {
                           bundleId: $0.bundleId)
         }
         guard let data = try? JSONEncoder().encode(stored) else { return }
-        try? data.write(to: HopBearer.messagesFileURL, options: .atomic)
+        // apple-04: .completeFileProtection encrypts this history at rest (keyed to the device passcode)
+        // so plaintext chat + image bytes don't sit unprotected beside the SQLCipher hop.db or leak via a
+        // device backup. No-op on macOS (no data protection), effective on iOS.
+        try? data.write(to: HopBearer.messagesFileURL, options: [.atomic, .completeFileProtection])
         writeAutomationDump()   // TEST/AUTOMATION: mirror self-addr + rx/tx for the headless harness
     }
 
@@ -1642,9 +1703,21 @@ public final class HopBearer: NSObject, ObservableObject {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("automation.json")
     }
+    /// apple-04: the automation mirror is a PLAINTEXT dump of self-address + recent messages, which
+    /// defeats SQLCipher-at-rest if it ships. It exists ONLY for the headless test harness, so it is
+    /// written ONLY in DEBUG builds or when the process was launched under the harness (a HOP_AUTO env,
+    /// which real users never set). Release builds with no harness env never touch automation.json.
+    static var automationMirrorEnabled: Bool {
+        #if DEBUG
+        return true
+        #else
+        return ProcessInfo.processInfo.environment["HOP_AUTO"] != nil
+        #endif
+    }
     /// Rewrite the automation mirror (last ~100 rx + tx). Called on every message change (from
     /// `saveMessages`) and once at startup so `self` is discoverable even before any traffic.
     func writeAutomationDump() {
+        guard HopBearer.automationMirrorEnabled else { return }   // apple-04: never a plaintext mirror in shipped release
         let rx = messages.filter { $0.incoming }.suffix(100).map {
             AutomationDump.Rx(from: $0.peerAddr.map(HopBearer.base58) ?? $0.peer,
                               text: $0.text, at: Int64($0.sentAt.timeIntervalSince1970 * 1000))
@@ -1658,7 +1731,9 @@ public final class HopBearer: NSObject, ObservableObject {
                                   auto: HopBearer.autoEnvSeen)
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(dump) else { return }
-        try? data.write(to: HopBearer.automationFileURL, options: .atomic)
+        // completeFileProtection even for the debug/harness mirror (defense in depth; harness reads it
+        // over devicectl while the device is unlocked).
+        try? data.write(to: HopBearer.automationFileURL, options: [.atomic, .completeFileProtection])
     }
 
     private static var channelsFileURL: URL {
@@ -1670,7 +1745,7 @@ public final class HopBearer: NSObject, ObservableObject {
         channelSaveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let data = try? JSONEncoder().encode(self.hpsThreads) else { return }
-            try? data.write(to: HopBearer.channelsFileURL, options: .atomic)
+            try? data.write(to: HopBearer.channelsFileURL, options: [.atomic, .completeFileProtection])  // apple-04
         }
         channelSaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
@@ -1727,7 +1802,7 @@ public final class HopBearer: NSObject, ObservableObject {
         }
         DispatchQueue.global(qos: .utility).async {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: HopBearer.contactsFileURL, options: .atomic)
+            try? data.write(to: HopBearer.contactsFileURL, options: [.atomic, .completeFileProtection])  // apple-04
         }
     }
     private func loadContacts() {
