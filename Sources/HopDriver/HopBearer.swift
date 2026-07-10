@@ -1013,17 +1013,50 @@ public final class HopBearer: NSObject, ObservableObject {
                      discoverable: Bool = false) -> Data {
         let p = path.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty else { return Data() }
-        // Synchronous return to the UI (mints + persists keys): a brief core.sync. Deadlock-free —
-        // core never sync-waits back on main.
+        // Synchronous return to the UI (mints + persists keys): a brief core.sync. Deadlock-free — no
+        // core callback ever sync-waits back on main (they all hop to main via DispatchQueue.main.async,
+        // never .sync), so `core.sync` from main can never deadlock. It CAN still stall the UI behind
+        // whatever is queued on the serial core queue (a packet drain, a message seal); this variant
+        // exists only for the caller that genuinely needs the service pubkey inline. A caller that does
+        // NOT need the pubkey (e.g. a "Create" button that dismisses) should use `hpsRegister(..., then:)`
+        // below, which is the same async-snapshot shape as `hpsHostSnapshot` and never touches the
+        // render path with a sync.
         let pk = core.sync {
             node.registerService(path: p, kind: channel ? .channel : .service,
                                  access: access, visibility: discoverable ? .discoverable : .private)
         }
+        insertHostedTopic(p, channel: channel, access: access)
+        return pk
+    }
+
+    /// Async host-a-topic: mint + persist keys OFF the render path (on the core queue), then deliver the
+    /// service pubkey on main. Same async-snapshot shape as `hpsHostSnapshot` (apple-10) — a caller that
+    /// does not need the pubkey inline should prefer this so registration never does a `core.sync` from
+    /// the SwiftUI render path (which stalls the UI behind the core serial queue under congestion, the
+    /// 0x8BADF00D class the apple-10 mitigation removed). `then` is optional and runs on main.
+    public func hpsRegister(path: String, channel: Bool, access: HpsAccess = .open,
+                            discoverable: Bool = false, then completion: ((Data) -> Void)? = nil) {
+        let p = path.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty else { completion?(Data()); return }
+        // Mirror the sync path's optimistic UI insert immediately (on main), so the topic row appears
+        // without waiting on the core queue; the key mint runs async and the pubkey is delivered back.
+        insertHostedTopic(p, channel: channel, access: access)
+        core.async { [weak self] in
+            guard let self else { return }
+            let pk = self.node.registerService(path: p, kind: channel ? .channel : .service,
+                                                access: access,
+                                                visibility: discoverable ? .discoverable : .private)
+            DispatchQueue.main.async { completion?(pk) }
+        }
+    }
+
+    /// Optimistic UI insert for a topic we host (main-thread @Published mutation). Shared by both the
+    /// sync and async `hpsRegister` so the two never drift.
+    private func insertHostedTopic(_ p: String, channel: Bool, access: HpsAccess) {
         if !hpsTopics.contains(where: { $0.host == myAddrCache && $0.path == p }) {
             hpsTopics.insert(HpsTopic(host: myAddrCache, path: p, isChannel: channel,
                                       hosting: true, access: access), at: 0)
         }
-        return pk
     }
 
     /// Subscribe to `hps://{hostBase58}/{path}` — request the topic's keys from its host.
@@ -1083,7 +1116,11 @@ public final class HopBearer: NSObject, ObservableObject {
         hpsInvites.removeAll { $0.path == inv.path && $0.host == inv.host }
     }
 
-    /// Host: pending join requests (RequestToJoin) for a topic. Synchronous UI read → brief core.sync.
+    /// Host: pending join requests (RequestToJoin) for a topic. LEGACY synchronous read — do NOT call
+    /// from a SwiftUI render path; it does a `core.sync` that stalls the UI behind the core serial queue
+    /// under congestion (the apple-10 stall class). Deadlock-free (no core callback sync-waits on main),
+    /// but render-path callers should use `hpsHostSnapshot` (which fetches reach + pending + members off
+    /// the core queue in one hop) instead. Retained only for off-render-path / test callers.
     public func hpsPending(_ topic: HpsTopic) -> [Data] { core.sync { node.hpsPending(path: topic.path) } }
     public func hpsApprove(_ topic: HpsTopic, _ who: Data) {
         let path = topic.path
@@ -1094,7 +1131,9 @@ public final class HopBearer: NSObject, ObservableObject {
         let path = topic.path
         core.async { [weak self] in try? self?.node.hpsDeny(path: path, requester: who) }
     }
-    /// Host: reach (unique acking members) + the retained-member set. Synchronous UI reads.
+    /// Host: reach (unique acking members) + the retained-member set. LEGACY synchronous reads — same
+    /// caveat as `hpsPending`: do NOT call from a SwiftUI render path (they `core.sync`). Render-path
+    /// callers should use `hpsHostSnapshot`, which reads all three off the core queue in one hop.
     public func hpsReach(_ topic: HpsTopic) -> Int { core.sync { Int(node.hpsReach(path: topic.path)) } }
     public func hpsMembers(_ topic: HpsTopic) -> [Data] { core.sync { node.hpsMembers(path: topic.path) } }
 
