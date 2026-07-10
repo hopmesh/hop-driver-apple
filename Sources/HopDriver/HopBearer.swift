@@ -532,7 +532,11 @@ public final class HopBearer: NSObject, ObservableObject {
         // also shares it to new neighbours immediately). The shared RelayBearer owns its own
         // reconnect/check-in backoff (DESIGN.md §28), so the driver no longer redials the relay here.
         if tickCount % 20 == 0 { publishPresence() }
-        pump()
+        // apple-r3-01: a backgroundTick is a background/locked wake. Its pump can drain a received
+        // message out of the node inbox into `messages`; flush the mirror synchronously once that inbox
+        // has been applied so the message survives if iOS suspends/kills us before the 1s save-debounce
+        // fires (otherwise it's gone from the node inbox but never reached messages.json).
+        pump(flushAfter: true)
     }
 
     /// Persisted display name to use across launches (falls back to the device name).
@@ -918,7 +922,11 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Drain ALL node outputs on `core` (the only queue allowed to touch `node`), then apply the
     /// resulting plain-data snapshots on main (link routing + @Published + bookkeeping). Safe to call
     /// from any thread.
-    private func pump() {
+    /// Drain the node and apply results on the main actor. `flushAfter` (set by a background wake, see
+    /// `backgroundTick`) forces the debounced mirror writes to disk synchronously once the inbox has been
+    /// applied, so a message received during a short/locked background wake can't be lost to the 1s save
+    /// debounce if iOS suspends us (apple-r3-01).
+    private func pump(flushAfter: Bool = false) {
         core.async { [weak self] in
             guard let self else { return }
             let outgoing = self.node.drainOutgoing()
@@ -941,6 +949,8 @@ public final class HopBearer: NSObject, ObservableObject {
                 self.applyDnsLookups(dnsLookups)
                 self.applyHpsMessages(hpsMsgs)
                 self.applyHpsInvites(hpsInvs)
+                // apple-r3-01: persist NOW (don't wait out the 1s debounce) on a background wake.
+                if flushAfter { self.flushPendingSaves() }
             }
         }
     }
@@ -1562,7 +1572,7 @@ public final class HopBearer: NSObject, ObservableObject {
     /// persists. The node store (hop.db) remains the source of truth; this only closes the mirror gap.
     static let uiMirrorProtection: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
 
-    private static var messagesFileURL: URL {
+    static var messagesFileURL: URL {   // internal (not private): the apple-r3-01 flush test reads it
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("messages.json")
     }
@@ -1575,6 +1585,27 @@ public final class HopBearer: NSObject, ObservableObject {
         let work = DispatchWorkItem { [weak self] in self?.saveMessages() }
         messageSaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+
+    /// apple-r3-01: flush any pending debounced mirror writes SYNCHRONOUSLY. The 1s debounce in
+    /// `scheduleMessageSave`/`scheduleChannelSave` coalesces write bursts, but it also opens a window:
+    /// a background/locked wake drains the node inbox into `messages` (destructive `takeInbox`), yet the
+    /// mirror write is deferred 1s. If iOS suspends or kills the app inside that window, the received
+    /// message is gone from the node inbox but not yet in messages.json, so it vanishes from chat history
+    /// on relaunch. Calling this at the end of a background pump and on scenePhase==.background cancels the
+    /// pending debounce and writes NOW, closing the window. Idempotent and cheap when nothing is pending
+    /// (only writes if a save was actually queued). Must be called on the main actor (touches `messages`).
+    public func flushPendingSaves() {
+        if messageSaveWork != nil {
+            messageSaveWork?.cancel()
+            messageSaveWork = nil
+            saveMessages()
+        }
+        if channelSaveWork != nil {
+            channelSaveWork?.cancel()
+            channelSaveWork = nil
+            saveChannels()
+        }
     }
 
     private func saveMessages() {
@@ -1665,12 +1696,13 @@ public final class HopBearer: NSObject, ObservableObject {
     private func scheduleChannelSave() {
         guard !loadingMessages else { return }
         channelSaveWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, let data = try? JSONEncoder().encode(self.hpsThreads) else { return }
-            try? data.write(to: HopBearer.channelsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
-        }
+        let work = DispatchWorkItem { [weak self] in self?.saveChannels() }
         channelSaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+    private func saveChannels() {
+        guard let data = try? JSONEncoder().encode(hpsThreads) else { return }
+        try? data.write(to: HopBearer.channelsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
     }
     private func loadChannels() {
         guard let data = try? Data(contentsOf: HopBearer.channelsFileURL),
