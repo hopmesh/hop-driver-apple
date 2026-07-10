@@ -438,14 +438,18 @@ public final class HopBearer: NSObject, ObservableObject {
             nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
                 self.appActive = true
-                HopBearerBle.bleAppInBackground = false   // shared BLE: foreground liveness deadline
+                // apple-02: setBackground(false) resets the liveness deadline AND ends the bg-task
+                // assertion (nothing to protect in the foreground).
+                self.bleBearer.setBackground(false)
                 self.publishPresence(); self.restartWiFi()
                 self.pump()
             }
             nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
                 self.appActive = false
-                HopBearerBle.bleAppInBackground = true    // shared BLE: relaxed background deadline
+                // apple-02: setBackground(true) relaxes the liveness deadline AND takes a bg-task
+                // assertion when links are live, so a suspend doesn't kill an in-flight receive.
+                self.bleBearer.setBackground(true)
                 self.publishPresence(); self.pump()
             }
             #endif
@@ -785,7 +789,7 @@ public final class HopBearer: NSObject, ObservableObject {
     private func startSharedBearers() {
         HopBearerBle.bleQueue = bleQueue
         HopBearerBle.bleRunLoop = IOThread.shared.runLoop
-        HopBearerBle.bleAppInBackground = !appActive
+        bleBearer.setBackground(!appActive)   // seed liveness flag (no links yet, so no assertion taken)
         bearerMgr.sink = bearerSink
         if !isRelayOnly {
             bearerMgr.register(bleBearer)   // BLE (central-only suppresses advertising via config.role)
