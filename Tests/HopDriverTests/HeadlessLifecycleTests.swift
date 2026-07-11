@@ -125,7 +125,7 @@ final class HeadlessLifecycleTests: XCTestCase {
         XCTAssertEqual(b.hopsResults["nonexistent.invalidtld"], "resolving…", "the optimistic state is set synchronously")
         settle(b)
         // With no internet and no peers the node cannot resolve, so the row must resolve to SOME terminal
-        // state (an offline/no-endpoint error or a still-pending lookup) — never a crash.
+        // state (an offline/no-endpoint error or a still-pending lookup) - never a crash.
         XCTAssertNotNil(b.hopsResults["nonexistent.invalidtld"])
     }
 

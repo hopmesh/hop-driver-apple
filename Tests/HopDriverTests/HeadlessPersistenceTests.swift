@@ -1,7 +1,7 @@
 // Mirror-persistence round-trips (cov/apple-driver): messages.json / contacts.json / channels.json are the
 // on-disk UI history the chat list reads on relaunch. Save on one bearer, load on a fresh one, assert the
 // content survived. The mirror files live in a process-global Documents dir (as in production), so each
-// test clears them before/after — matching BackgroundFlushTests' existing pattern.
+// test clears them before/after - matching BackgroundFlushTests' existing pattern.
 
 import XCTest
 import Foundation

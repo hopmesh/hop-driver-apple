@@ -1,4 +1,4 @@
-// HopBearer — the device/radio/network I/O surface, split out of HopBearer.swift (cov/apple-driver).
+// HopBearer - the device/radio/network I/O surface, split out of HopBearer.swift (cov/apple-driver).
 //
 // EVERYTHING here drives a real radio or a live network socket and therefore cannot run under a headless
 // macOS `swift test` (no BLE/Wi-Fi peer, no reachable hops:// endpoint, no DoH round-trip, no UIKit app
@@ -48,7 +48,7 @@ extension HopBearer {
         NSLog("HOPLOG wifi start: \(pid.displayName) private=\(privateMode)")
     }
 
-    /// Re-attempt advertise/browse and clear any blocked state. Called on foreground —
+    /// Re-attempt advertise/browse and clear any blocked state. Called on foreground -
     /// MultipeerConnectivity errors out while the Local Network prompt is still
     /// pending, so this recovers once the user grants permission (no relaunch needed).
     func restartWiFi() {
@@ -137,10 +137,10 @@ extension HopBearer {
     /// the response can be matched back (DESIGN.md §30). Runs on main; the node send is on core.
     func fireHops(domain: String, path: String, endpoint: Data) {
         // We learned domain↔address from HNS, so label the endpoint by its domain right away
-        // (no need to wait for a hop.identify round-trip) — shows in the endpoints list + traces.
+        // (no need to wait for a hop.identify round-trip) - shows in the endpoints list + traces.
         nameByAddr[endpoint] = domain
         // Open a direct link to the endpoint (wss://<domain>) so the sealed request has a path
-        // to it — the endpoint doesn't transit our relay (§30). Spray-and-wait holds the
+        // to it - the endpoint doesn't transit our relay (§30). Spray-and-wait holds the
         // bundle and delivers it the moment the Noise handshake on this link completes.
         dialEndpoint(domain)
         hopsResults[domain] = "fetching…"
@@ -338,7 +338,7 @@ extension HopBearer: URLSessionWebSocketDelegate {
 
 /// Adapts the shared `BearerManager` to HopBearer's existing node seam. Every link from every
 /// registered bearer (BLE + LAN) surfaces here in ONE global link-id space and is driven straight into
-/// the same `linkUp` / `deliver` / `linkDown` the legacy transports use — so the node sees no difference
+/// the same `linkUp` / `deliver` / `linkDown` the legacy transports use - so the node sees no difference
 /// in which radio a link rode in on. Holds the owner `unowned`: HopBearer owns this sink (a stored
 /// property), so it never outlives its owner.
 final class BearerSink: LinkSink {

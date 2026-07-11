@@ -1,7 +1,7 @@
 // Snapshot-mapping coverage (cov/apple-driver). The node drains its outputs into plain FFI records, and the
 // driver maps them onto @Published UI state on main. These helpers are the single biggest chunk of
 // HopBearer.swift (applyRefresh alone is ~165 lines), so we build the FFI records directly and call the
-// (internal) mapping methods synchronously on the test's main thread — exactly where they run in the app.
+// (internal) mapping methods synchronously on the test's main thread - exactly where they run in the app.
 
 import XCTest
 import Foundation
@@ -169,7 +169,7 @@ final class HeadlessMappingTests: XCTestCase {
         settle(b)
     }
 
-    // MARK: applyRefresh — the big one
+    // MARK: applyRefresh - the big one
 
     private func snapshot(browse: [ServiceHit] = [], peerLinks: [PeerLink] = [],
                           secured: Set<Data> = [], routed: Set<Data> = [],

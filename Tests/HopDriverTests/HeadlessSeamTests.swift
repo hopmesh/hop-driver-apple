@@ -1,5 +1,5 @@
-// The node seam (cov/apple-driver): the transport-agnostic entry points every bearer drives — a link came
-// up / delivered bytes / dropped — plus a raw node mutation. These just funnel into the real HopNode on the
+// The node seam (cov/apple-driver): the transport-agnostic entry points every bearer drives - a link came
+// up / delivered bytes / dropped - plus a raw node mutation. These just funnel into the real HopNode on the
 // `core` queue, so they're safe to drive directly with synthetic link ids (no radio). Also pins the
 // remaining applyRefresh advert-collapse branch (a stale advert arriving AFTER a fresher one).
 
@@ -24,7 +24,7 @@ final class HeadlessSeamTests: XCTestCase {
         let b = makeHeadlessBearer()
         let a = addr(0x51)
         let now = HopBearer.nowMs()
-        // Fresher advert first, then an OLDER one for the same publisher — the older one must only refresh
+        // Fresher advert first, then an OLDER one for the same publisher - the older one must only refresh
         // the hop distance, never overwrite the current name/state.
         let newer = ServiceHit(publisher: a, service: "presence", title: "Current", summary: "fg|ios|App",
                                tags: [], hops: 3, createdAt: now)

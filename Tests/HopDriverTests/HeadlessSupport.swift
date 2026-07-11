@@ -28,7 +28,7 @@ extension XCTestCase {
             displayName: name,
             defaultRelay: relay,
             role: role,
-            dbKey: Data()))   // plain store — headless test, no key material needed
+            dbKey: Data()))   // plain store - headless test, no key material needed
     }
 
     /// Drain queued node work (`core` is serial, so a `sync {}` is a barrier) plus the main-queue
@@ -41,7 +41,7 @@ extension XCTestCase {
         }
     }
 
-    /// A valid 32-byte address filled with `seed`, and its base58 form — a foreign target for
+    /// A valid 32-byte address filled with `seed`, and its base58 form - a foreign target for
     /// sends/contacts/subscribes. The app-side guards only check length + "not me"; the node defers a
     /// send to any address, so a synthetic one drives every app path without a second live node.
     func foreignAddr(_ seed: UInt8 = 0x33) -> Data { Data(repeating: seed, count: 32) }
