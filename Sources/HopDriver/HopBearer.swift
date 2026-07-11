@@ -1468,7 +1468,9 @@ public final class HopBearer: NSObject, ObservableObject {
 
     /// Split `hops://<domain>/<path>` (or a bare `<domain>`) into (domain, path). The path
     /// defaults to "/" and is path+query only — what `sendHopsRequest` expects.
-    private static func parseHops(_ raw: String) -> (domain: String, path: String) {
+    // Internal (not private) so the pure hops:// URL split (strip scheme, split domain/path, default the
+    // path to "/") is unit-testable without a node or a live fetch.
+    static func parseHops(_ raw: String) -> (domain: String, path: String) {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let r = s.range(of: "hops://") { s.removeSubrange(s.startIndex..<r.upperBound) }
         guard let slash = s.firstIndex(of: "/") else { return (s, "/") }
