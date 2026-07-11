@@ -1,4 +1,4 @@
-// Keychain.swift — the device-only secret store behind IdentityStore (sec-priv-02).
+// Keychain.swift - the device-only secret store behind IdentityStore (sec-priv-02).
 //
 // The Hop identity seed and the SQLCipher db key used to be SHA-256(identifierForVendor): at most
 // ~122 bits of a value that is NOT secret (any on-device code in the app sandbox, a backup, or a

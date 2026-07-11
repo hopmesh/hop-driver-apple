@@ -21,7 +21,7 @@ import UIKit
 
 /// The Hop identity secret is a **random 32-byte value generated once and kept in the device
 /// Keychain** (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, non-syncable, SE-wrapped where
-/// available) — see `HopKeychain` and sec-priv-02. The secret is the keypair is the address, so
+/// available) - see `HopKeychain` and sec-priv-02. The secret is the keypair is the address, so
 /// reading the same Keychain value back every launch keeps the node routeable.
 ///
 /// This replaces the old `SHA-256(identifierForVendor)` derivation, which gave the long-term
@@ -30,7 +30,7 @@ import UIKit
 /// that never leaves the device. `note` is shown in the UI for transparency.
 ///
 /// Migration: the legacy value was deterministic and unrecoverable as a random secret, so the first
-/// launch after this change generates fresh secrets — a ONE-TIME identity reset (new address) and a
+/// launch after this change generates fresh secrets - a ONE-TIME identity reset (new address) and a
 /// fresh db key. Every launch after that is stable from the Keychain.
 public enum IdentityStore {
     public static var note = "init"
@@ -45,7 +45,7 @@ public enum IdentityStore {
 
     /// The 32-byte SQLCipher key for the on-device `hop.db` (F-25). Random, stored once in the
     /// Keychain (distinct account from the identity), so it is: (a) stable every launch, (b) a real
-    /// secret that is NOT derivable from the vendor id, and (c) NOT present in the db file — a pulled
+    /// secret that is NOT derivable from the vendor id, and (c) NOT present in the db file - a pulled
     /// or backed-up `hop.db` is useless without the device's Keychain. Only encrypts when libhop is
     /// built `--features sqlcipher` (otherwise the key is accepted but the db stays plain).
     public static func dbKey() -> Data {
@@ -61,7 +61,7 @@ public final class HopBearer: NSObject, ObservableObject {
     /// How a host drives the runtime. `.full` = every transport + background/advertising
     /// (the iOS app). `.centralOnly` = node + BLE central scanning only, no advertising /
     /// Wi-Fi / LAN / relay / beacon (the headless `hopmac` macOS test node). `.relayOnly` =
-    /// node + the cloud relay ONLY — NO BLE (no advertise/scan), no LAN, no Wi-Fi — so the only
+    /// node + the cloud relay ONLY - NO BLE (no advertise/scan), no LAN, no Wi-Fi - so the only
     /// path to a peer is the relay (a clean relay-path test client; it must NOT appear on BLE).
     public enum Role { case full, centralOnly, relayOnly }
 
@@ -91,24 +91,24 @@ public final class HopBearer: NSObject, ObservableObject {
     private let config: Config
     /// `.full` host (iOS app) vs a stripped central-only node (hopmac).
     var isFull: Bool { config.role == .full }
-    /// Relay-and-nothing-else: no BLE (advertise/scan), no LAN, no Wi-Fi — the relay is the only bearer.
+    /// Relay-and-nothing-else: no BLE (advertise/scan), no LAN, no Wi-Fi - the relay is the only bearer.
     private var isRelayOnly: Bool { config.role == .relayOnly }
     /// Whether this host should connect the cloud relay link (full app, or a relay-only test client).
     private var wantsRelay: Bool { isFull || isRelayOnly }
 
-    // Threading model (Stage C — move BLE + node off main):
-    //  • `core`     — the ONLY queue that may touch `node`. UniFFI HopNode is NOT thread-safe, so a
+    // Threading model (Stage C - move BLE + node off main):
+    //  • `core`     - the ONLY queue that may touch `node`. UniFFI HopNode is NOT thread-safe, so a
     //                 single serial funnel is mandatory. Node outputs are drained here into plain-data
     //                 snapshots, then applied on main.
-    //  • `bleQueue` — the CoreBluetooth managers' delegate-callback queue. iOS 18+ silently drops CB
+    //  • `bleQueue` - the CoreBluetooth managers' delegate-callback queue. iOS 18+ silently drops CB
     //                 callbacks delivered on a busy main runloop, so they must NOT land on main; each
     //                 delegate hops to main (bookkeeping) / core (node).
-    //  • IOThread   — the L2CAP streams + their keepalive/watchdog timers (HopLink), off main.
-    //  • main       — every @Published / SwiftUI mutation, and all bearer bookkeeping dictionaries
+    //  • IOThread   - the L2CAP streams + their keepalive/watchdog timers (HopLink), off main.
+    //  • main       - every @Published / SwiftUI mutation, and all bearer bookkeeping dictionaries
     //                 (link routing, contacts, identities…). Single-homing them on main avoids racing
     //                 the heavily-shared routing tables across queues.
     // Internal (not private) so the headless-node test suite can drain queued node work deterministically
-    // (`core.sync {}` as a barrier) — see cov/apple-driver. Widening to internal does not change the
+    // (`core.sync {}` as a barrier) - see cov/apple-driver. Widening to internal does not change the
     // package's public surface (the demo app uses only `public` API).
     let core = DispatchQueue(label: "hop.core")
     private let bleQueue = DispatchQueue(label: "hop.ble")
@@ -124,12 +124,12 @@ public final class HopBearer: NSObject, ObservableObject {
         core.async { [weak self] in self?.node.received(link: link, bytes: bytes) }
         pump()
     }
-    /// A transport link came up — drive the Noise handshake (on `core`) then pump.
+    /// A transport link came up - drive the Noise handshake (on `core`) then pump.
     func linkUp(_ id: UInt64, initiator: Bool) {
         core.async { [weak self] in self?.node.connected(link: id, initiator: initiator) }
         pump()
     }
-    /// A transport link dropped — tell the node (on `core`) then refresh the UI.
+    /// A transport link dropped - tell the node (on `core`) then refresh the UI.
     func linkDown(_ id: UInt64) {
         core.async { [weak self] in self?.node.disconnected(link: id) }
         scheduleRefresh()
@@ -142,7 +142,7 @@ public final class HopBearer: NSObject, ObservableObject {
 
     public init(config: Config) {
         self.config = config
-        // Persistent message store on disk — survives restarts; bounded (older relayed messages
+        // Persistent message store on disk - survives restarts; bounded (older relayed messages
         // are evicted). Identity is derived from the host-supplied seed (stable address every
         // launch, no storage to fail). The app secret isolates this app's hps:// channels/services
         // from other apps: only apps built with the same secret can discover/join them (§32).
@@ -150,23 +150,24 @@ public final class HopBearer: NSObject, ObservableObject {
         // same as open). Only actually encrypts when libhop is built `--features sqlcipher`.
         self.node = HopNode.openKeyed(dbPath: config.dbPath, secret: config.deviceSeed,
                                       appSecret: config.appSecret, key: config.dbKey)
-        // Our address is immutable (derived from the seed). Cache it now — at init no queue is
-        // running yet, so this lone read is safe — so UI/render paths never touch `node` for it.
+        // Our address is immutable (derived from the seed). Cache it now - at init no queue is
+        // running yet, so this lone read is safe - so UI/render paths never touch `node` for it.
         self.myAddrCache = node.address()
         self.myShortAddr = HopBearer.shortData(myAddrCache)
         super.init()
     }
 
     /// Our own raw 32-byte address, cached at init (immutable). Lets UI/render read it without
-    /// hopping to `core`.
-    private let myAddrCache: Data
-    private let myShortAddr: Data   // 8-byte short form (for resolving our own trace hops, §27)
+    /// hopping to `core`. Internal (not private) so the per-concern sibling extension files (Hps/Services)
+    /// can reach it; still module-private.
+    let myAddrCache: Data
+    let myShortAddr: Data   // 8-byte short form (for resolving our own trace hops, §27)
 
     // NOTE: the legacy BLE service/characteristic UUIDs (F09000xx…) and the iBeacon proximity UUID moved
     // to the shared bearer with the transport code. HopBearerBle owns SERVICE_UUID / ENDPOINT_CHAR and
     // the byte-matched BEACON_UUID (monitor + emission), so the driver no longer declares them (F-40).
     public static let refreshTaskId = "sh.hopme.refresh"
-    /// Longer background-processing task (runs idle/charging) to drain a backlog — e.g. a
+    /// Longer background-processing task (runs idle/charging) to drain a backlog - e.g. a
     /// large image accumulating across wakes (DESIGN.md §22, §28).
     public static let processTaskId = "sh.hopme.process"
     /// App-level presence service: title = display name (DESIGN.md §23).
@@ -179,45 +180,9 @@ public final class HopBearer: NSObject, ObservableObject {
     /// How long a presence advert lives before it must be refreshed (10 min).
     static let presenceTtlMs: UInt32 = 600_000
 
-    public struct Peer: Identifiable, Hashable {
-        public let address: Data; public let name: String; public var hops: UInt8
-        public var active: Bool = true       // peer's app foreground (vs backgrounded)
-        public var platform: String = ""     // "ios" / "android"
-        public var app: String = ""          // the app embedding Hop on that device
-        public var id: Data { address }
-        // Identity is the address — metadata updates don't churn navigation.
-        public static func == (l: Peer, r: Peer) -> Bool { l.address == r.address }
-        public func hash(into h: inout Hasher) { h.combine(address) }
-    }
-    public struct Message: Identifiable {
-        public let id = UUID()
-        public let peer: String; public let text: String; public let incoming: Bool
-        public var peerAddr: Data? = nil   // the other party's address — stable across renames
-        public var contentType: String = "text/plain"
-        public var imageData: Data? = nil  // raw bytes for a single-image message (content_type image/*)
-        public var images: [Data] = []     // one or more images (a multipart/mixed message)
-        public var bundleId: Data? = nil
-        // Incoming metadata (shown under the bubble).
-        public var hops: UInt8 = 0
-        public var latencyMs: UInt64? = nil      // received time − sender's send time
-        public var trace: [TraceHopInfo] = []    // each forwarding hop, resolved at render (§27)
-        // Outgoing delivery tracking.
-        public var sentAt: Date = Date()
-        public var deliveredAt: Date? = nil
-        public var relayed: UInt32 = 0
-        public var delivered: Bool = false
-        public var deliveryHops: UInt8 = 0
-        public var deliveryMs: UInt32 = 0   // forward-path (A→B) latency the recipient reported, ms
-        public var failed: Bool = false   // gave up (e.g. the queue was cleared before it sent)
-    }
-    public struct QueueRow: Identifiable {
-        public let id: Data; public let own: Bool; public let to: String; public let priority: UInt8; public let hops: UInt8
-    }
-    public struct TransportStatus: Identifiable, Hashable {
-        public let id: String      // "Bluetooth" / "Wi-Fi"
-        public let active: Bool    // radio up + bearer running
-        public let links: Int      // live links on this transport
-    }
+    // The UI value types (Peer / Message / QueueRow / TransportStatus / HnsCacheRow / HpsTopic /
+    // HpsMsgRow / HpsHostSnapshot / HopResponse) live in HopModels.swift as `extension HopBearer`, so they
+    // remain `HopBearer.Peer` etc. but no longer bulk up the class body.
 
     @Published public var myAddress = ""
     @Published public var myName = ""
@@ -242,7 +207,7 @@ public final class HopBearer: NSObject, ObservableObject {
     @Published public var transports: [TransportStatus] = []  // per-bearer status (all run at once)
     @Published public var relayStatus = "not connected"        // cloud relay link state
     /// A relay the user pinned by direct address (persisted). A device only ever talks to ONE
-    /// relay — routing is anycast — so pinning overrides the default anycast target for testing
+    /// relay - routing is anycast - so pinning overrides the default anycast target for testing
     /// a specific relay, rather than publishing presence to several at once.
     @Published public var pinnedRelay: String? = UserDefaults.standard.string(forKey: "hop.pinnedRelay")
     @Published public var linkTransports: [Data: Set<String>] = [:]  // direct peer → transport(s) carrying it
@@ -250,14 +215,7 @@ public final class HopBearer: NSObject, ObservableObject {
     @Published public var endpoints: [Peer] = []   // directly-dialed hops:// endpoints (§30; not relays)
     @Published public var hnsCache: [HnsCacheRow] = []   // live HNS cache w/ ticking TTLs (§30, debug)
 
-    /// One HNS cache entry for the debug view: domain → address, with remaining TTL (seconds).
-    public struct HnsCacheRow: Identifiable {
-        public var id: String { domain }
-        public let domain: String
-        public let address: Data    // empty = a cached negative (no such endpoint)
-        public let ttl: UInt32      // remaining lifetime, ticking down to expiry
-    }
-    // hps:// pub/sub — services & channels (§32). Topics we host or subscribe to, the messages
+    // hps:// pub/sub - services & channels (§32). Topics we host or subscribe to, the messages
     // per topic (one thread each), per-topic unread, and invites we've received.
     @Published public var hpsTopics: [HpsTopic] = []
     @Published public var hpsThreads: [String: [HpsMsgRow]] = [:] { didSet { scheduleChannelSave() } }   // topic id → its messages
@@ -265,52 +223,32 @@ public final class HopBearer: NSObject, ObservableObject {
     @Published public var hpsInvites: [HpsInvite] = []              // invites received (FFI record)
     var activeTopic: String?                                 // topic on screen (not counted)
 
-    /// An hps:// topic we host (`hosting`) or follow (`subscribed`), keyed by host+path.
-    public struct HpsTopic: Identifiable {
-        public var id: String { "\(HopBearer.base58(host))/\(path)" }
-        public let host: Data        // the node that hosts the topic (us, if hosting)
-        public let path: String
-        public let isChannel: Bool   // channel (anyone writes) vs service (only owner broadcasts)
-        public let hosting: Bool     // true = we registered it; false = we subscribed to it
-        public var access: HpsAccess = .open   // key-handoff policy (for topics we host)
-        /// Whether we can post: a channel (anyone), or a service we host.
-        public var writable: Bool { isChannel || hosting }
-    }
-    /// One received hps:// message, decrypted + sender-verified (§32).
-    public struct HpsMsgRow: Identifiable, Codable {
-        public var id = UUID()
-        public let path: String
-        public let sender: Data
-        public let text: String
-        public let at: UInt64
-    }
-
     /// Resolved display name per 8-byte short address, for resolving trace hops (§27/§29).
     @Published public var nameByShort: [Data: String] = [:]
     @Published public var serviceLog: [String] = []   // hop.identify + custom service-call activity (§29)
     var identities: [Data: IdentityInfo] = [:]   // address → identify record (internal: test seam)
-    private var identifyAsked = Set<Data>()              // addresses we've sent hop.identify to
+    var identifyAsked = Set<Data>()              // addresses we've sent hop.identify to (internal: sibling files)
     var identifyReqs = Set<Data>()               // outstanding identify request bundle ids (internal: test seam)
     @Published public var messages: [Message] = [] { didSet { scheduleMessageSave() } }
     /// Latest hops:// result per domain, rendered for the UI ("200 · <body>" or an error).
     @Published public var hopsResults: [String: String] = [:]   // domain → rendered text (§30)
     @Published public var queue: [QueueRow] = []
     @Published public var unread: [String: Int] = [:] { didSet { updateAppBadge() } }   // peer name → unread incoming count
-    private var activePeer: String?              // chat currently on screen (not counted)
+    var activePeer: String?              // chat currently on screen (not counted) (internal: sibling files)
     private var loadingMessages = false          // suppress save while restoring history
     private var messageSaveWork: DispatchWorkItem?  // debounced history write
     private var channelSaveWork: DispatchWorkItem?  // debounced channel-thread write
 
-    /// The Hop node — created in `init(config:)` from the host's db path / identity seed / app
+    /// The Hop node - created in `init(config:)` from the host's db path / identity seed / app
     /// secret. Identity is derived from the seed (stable address every launch, no storage to
     /// fail); the db persists *messages*.
     let node: HopNode
 
-    /// Shared app secret for Hop Debug — all our demo devices use it so they interoperate. A
+    /// Shared app secret for Hop Debug - all our demo devices use it so they interoperate. A
     /// different app (different secret) can't see or join these channels. Exposed so a host can
     /// build the dev `Config`; to test cross-app isolation, change it on one device.
-    public static let appSecret = Data(repeating: 0x48, count: 32) // "H" ×32 — dev build only
-    // Wi-Fi bearer (MultipeerConnectivity) — a second transport feeding the same node.
+    public static let appSecret = Data(repeating: 0x48, count: 32) // "H" ×32 - dev build only
+    // Wi-Fi bearer (MultipeerConnectivity) - a second transport feeding the same node.
     var mcPeerID: MCPeerID?
     var mcSession: MCSession?
     var mcAdvertiser: MCNearbyServiceAdvertiser?
@@ -326,7 +264,7 @@ public final class HopBearer: NSObject, ObservableObject {
     // because the direct hops:// endpoint dialer (§30) reuses one URLSession for all endpoint links.
     var relaySession: URLSession?
     // Direct WS links to hops:// endpoints (DESIGN.md §30). The client dials the endpoint at
-    // wss://<domain> — it does NOT transit our relay (domain traffic stays off the fleet) — so
+    // wss://<domain> - it does NOT transit our relay (domain traffic stays off the fleet) - so
     // the endpoint authenticates via Noise as its HNS-published address and becomes a direct
     // peer we can seal requests to. Keyed by a distinct link-id range.
     var endpointWS: [UInt64: URLSessionWebSocketTask] = [:]
@@ -345,7 +283,7 @@ public final class HopBearer: NSObject, ObservableObject {
     public var isReady: Bool { !myAddress.isEmpty }
     /// Contacts as a sorted list (for the invite picker).
     public var contactList: [Peer] { contacts.values.sorted { $0.name.lowercased() < $1.name.lowercased() } }
-    private var userNamed = Set<Data>()        // contacts the user named (identify won't override)
+    var userNamed = Set<Data>()        // contacts the user named (identify won't override) (internal: sibling files)
     // hops:// fetches awaiting an HNS resolution: domain → the path to request once the
     // record resolves (DESIGN.md §30).
     var pendingHops: [String: String] = [:]   // internal: test seam
@@ -374,18 +312,18 @@ public final class HopBearer: NSObject, ObservableObject {
     let bearerMgr = BearerManager(baseLinkId: 1_000_000)
     /// One stable transport id for this process, shared by every registered bearer (the BLE/LAN HELLO id
     /// + the greater-id dedup tiebreaker). This is a TRANSPORT-layer id, distinct from the Hop node
-    /// address (SPEC R11) — the node still negotiates Noise over the bearer's DATA frames.
+    /// address (SPEC R11) - the node still negotiates Noise over the bearer's DATA frames.
     private let bearerId: Data = HopContract.randomNodeId()
     /// The shared BLE bearer, kept as a ref so a background wake can poke its `wake()` to re-arm
     /// scanning + re-adopt connected peripherals promptly (it self-recovers on `.poweredOn` too).
     /// A central-only host (hopmac) suppresses advertising so it scans/dials but stays undiscoverable.
     private lazy var bleBearer = BleBearer(myId: bearerId, suppressAdvertising: config.role == .centralOnly)
     /// Link ids currently owned by the `BearerManager`, so `applyOutgoing` routes their packets to it.
-    /// Written from the sink callbacks (BLE I/O thread / LAN queue) and read in `applyOutgoing` (main) —
+    /// Written from the sink callbacks (BLE I/O thread / LAN queue) and read in `applyOutgoing` (main) -
     /// guarded by `bearerLinksLock`.
     var bearerLinks = Set<UInt64>()
     let bearerLinksLock = NSLock()
-    /// Strong ref to the sink adapter — `BearerManager.sink` holds it weakly.
+    /// Strong ref to the sink adapter - `BearerManager.sink` holds it weakly.
     private lazy var bearerSink = BearerSink(self)
 
     /// The app embedding Hop on this device (shown to peers via presence).
@@ -403,14 +341,14 @@ public final class HopBearer: NSObject, ObservableObject {
         myAddress = HopBearer.base58(myAddrCache)   // address is cached + immutable (no node call)
         idNote = "\(IdentityStore.note) → \(myAddress.prefix(8))"
         // Node setup runs on `core` (the only queue allowed to touch the node), in order:
-        //  • setName — what hop.identify reports for us (§29).
-        //  • tick — set the node clock to real time BEFORE any advert. The node starts at now_ms=0,
+        //  • setName - what hop.identify reports for us (§29).
+        //  • tick - set the node clock to real time BEFORE any advert. The node starts at now_ms=0,
         //    so a prekey/presence advert stamped created_at=0 would be judged expired (1970 + TTL)
         //    and dropped instantly. Presence re-publishes and recovers, but the prekey is published
         //    once: without this peers never learn it and every message defers forever (§25).
-        //  • subscribe — presence is an app-level service (§23): publish our name on "presence" and
+        //  • subscribe - presence is an app-level service (§23): publish our name on "presence" and
         //    subscribe so discovered records are retained. The protocol knows nothing about names.
-        //  • publishPrekey — once; long TTL + link-up gossip re-offer it to new neighbours (§25).
+        //  • publishPrekey - once; long TTL + link-up gossip re-offer it to new neighbours (§25).
         // We deliberately do NOT stamp our app id into trace hops (§27 privacy).
         core.async { [weak self] in
             guard let self else { return }
@@ -431,7 +369,7 @@ public final class HopBearer: NSObject, ObservableObject {
             #if canImport(UIKit)
             // Re-publish presence with our foreground/background state on each transition
             // (iOS suspends us shortly after backgrounding, so the "bg" advert is our last
-            // word until we return — peers show that as our state). The shared LAN and Relay
+            // word until we return - peers show that as our state). The shared LAN and Relay
             // bearers manage their own lifecycle/backoff, so foreground only needs the flag + Wi-Fi.
             let nc = NotificationCenter.default
             nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -468,7 +406,7 @@ public final class HopBearer: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.wifiUp = path.status == .satisfied && path.usesInterfaceType(.wifi)
-                    // Declare whether we can reach the public internet (any interface — Wi-Fi,
+                    // Declare whether we can reach the public internet (any interface - Wi-Fi,
                     // cellular or wired). An internet-connected phone resolves HNS itself by
                     // servicing `takeDnsLookups()` in `pump()` (DESIGN.md §30).
                     let on = path.status == .satisfied
@@ -493,7 +431,7 @@ public final class HopBearer: NSObject, ObservableObject {
     private var tickCount = 0
 
     /// Re-publish our presence advert so it stays live (it carries a TTL) and any
-    /// rename propagates. The advert's publisher field is our address — that's all a
+    /// rename propagates. The advert's publisher field is our address - that's all a
     /// peer needs to seal a message back to us (DESIGN.md §4, §23).
     private func publishPresence() {
         guard !privateMode else { return }   // private: don't broadcast our name/address
@@ -558,176 +496,9 @@ public final class HopBearer: NSObject, ObservableObject {
         pump()
     }
 
-    /// Add a contact to the address book by base58 address. An empty `name` falls back to
-    /// the address (and hop.identify will fill in the device's own name if it has one); a
-    /// provided name is kept as your local alias. Returns false if the address is invalid.
-    @discardableResult
-    public func addContact(name: String, address base58: String) -> Bool {
-        let addr = addressFromBase58(text: base58.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard addr.count == 32, addr != myAddrCache else { return false }
-        let alias = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let label = alias.isEmpty ? HopBearer.shortHex(addr) : alias
-        nameByAddr[addr] = label
-        contacts[addr] = Peer(address: addr, name: label, hops: 0)
-        if alias.isEmpty {
-            queueIdentify(addr)   // resolve their device name if they set one
-        } else {
-            userNamed.insert(addr) // keep my alias
-        }
-        saveContacts(force: true)
-        pump()
-        return true
-    }
-
-    /// Clear the relay queue (our undelivered messages + bundles held for peers).
-    /// Anything of ours still in flight is now abandoned, so mark those bubbles "not sent"
-    /// instead of leaving them stuck on "Sending…".
-    public func clearQueue() {
-        core.async { [weak self] in self?.node.clearQueue() }
-        for i in messages.indices where !messages[i].incoming && !messages[i].delivered {
-            messages[i].failed = true
-        }
-        pump()
-    }
-
-    /// Send a message on `core`, then stamp the returned bundleId onto its placeholder bubble (main)
-    /// so delivery tracking can re-query it. The bubble is appended by the caller before this runs.
-    private func sendBundle(dst: Data, contentType: String, body: Data, messageId: UUID) {
-        core.async { [weak self] in
-            guard let self else { return }
-            // A thrown send is a real store/seal error (the peer-unreachable case defers with a valid
-            // id), so `id == nil` must mark the bubble failed — otherwise it shows "Sending…" forever
-            // and the "Not sent · tap to retry" path never engages (F-15).
-            var id: Data? = nil
-            do {
-                id = try self.node.sendMessage(dst: dst, contentType: contentType, body: body, requestAck: true)
-            } catch {
-                NSLog("HOPLOG sendMessage threw for \(messageId): \(error)")
-            }
-            let sentId = id
-            DispatchQueue.main.async {
-                if let i = self.messages.firstIndex(where: { $0.id == messageId }) {
-                    if let sentId { self.messages[i].bundleId = sentId }
-                    else { self.messages[i].failed = true }
-                }
-                self.pump()
-            }
-        }
-    }
-
-    public func send(_ text: String, to peer: Peer) {
-        rememberContact(peer)   // messaging someone adds them to your address book
-        let msg = Message(peer: peer.name, text: text, incoming: false, peerAddr: peer.address)
-        messages.append(msg)
-        sendBundle(dst: peer.address, contentType: "text/plain; charset=utf-8",
-                   body: Data(text.utf8), messageId: msg.id)
-    }
-
-    /// TEST/AUTOMATION hook: send `text` to a base58 ADDRESS, building a minimal peer (no UI
-    /// selection needed). Drives the headless automation surface (the `hopdemo://send` URL scheme
-    /// and the `HOP_AUTO` launch env var); not on any normal user path. The node defers/ratchets
-    /// to an as-yet-unreachable address like any send, so the target need not be discovered yet.
-    public func sendTo(addressBase58 b58: String, text: String) {
-        onMain { [weak self] in
-            guard let self else { return }
-            let addr = addressFromBase58(text: b58.trimmingCharacters(in: .whitespacesAndNewlines))
-            guard addr.count == 32, addr != self.myAddrCache else { return }
-            self.send(text, to: Peer(address: addr, name: self.displayName(addr), hops: 0))
-        }
-    }
-
-    /// Send an image. It's just a message with an image content type and the raw bytes as
-    /// the body — the core auto-streams it in chunks if it's too big for one bundle, and
-    /// the far side reassembles it back into one message (DESIGN.md §20).
-    public func sendImage(_ data: Data, to peer: Peer) {
-        rememberContact(peer)
-        let msg = Message(peer: peer.name, text: "", incoming: false, peerAddr: peer.address,
-                          contentType: "image/jpeg", imageData: data)
-        messages.append(msg)
-        sendBundle(dst: peer.address, contentType: "image/jpeg", body: data, messageId: msg.id)
-    }
-
-    /// Send text and/or one-or-more images as ONE message (`multipart/mixed`) — a single sealed
-    /// payload, carrier-chunked + reassembled like any message (DESIGN.md §20). The wire format
-    /// is shared with Android: `[u32 partCount][ per part: u16 ctLen, ct, u32 bodyLen, body ]`.
-    public func sendMultipart(text: String, images: [Data], to peer: Peer) {
-        var parts: [(String, Data)] = []
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { parts.append(("text/plain", Data(trimmed.utf8))) }
-        for img in images { parts.append(("image/jpeg", img)) }
-        guard !parts.isEmpty else { return }
-        let body = HopBearer.encodeMultipart(parts)
-        let msg = Message(peer: peer.name, text: trimmed, incoming: false, peerAddr: peer.address,
-                          contentType: "multipart/mixed", images: images)
-        messages.append(msg)
-        sendBundle(dst: peer.address, contentType: "multipart/mixed", body: body, messageId: msg.id)
-    }
-
-    /// Re-send a failed ("Not sent") message in place — rebuilds the same payload from its
-    /// content type and dispatches fresh, so the node defers/ratchets + tracks delivery again.
-    /// Recovery for a message that gave up (queue cleared, or still unsent at a restart).
-    public func retry(_ m: Message) {
-        guard !m.incoming, let addr = m.peerAddr else { return }
-        let body: Data
-        let ct: String
-        switch m.contentType {
-        case let c where c.hasPrefix("image/"):
-            guard let d = m.imageData else { return }
-            body = d; ct = "image/jpeg"
-        case "multipart/mixed":
-            var parts: [(String, Data)] = []
-            if !m.text.isEmpty { parts.append(("text/plain", Data(m.text.utf8))) }
-            for img in (m.imageData.map { [$0] } ?? m.images) { parts.append(("image/jpeg", img)) }
-            guard !parts.isEmpty else { return }
-            body = HopBearer.encodeMultipart(parts); ct = "multipart/mixed"
-        default:
-            body = Data(m.text.utf8); ct = "text/plain; charset=utf-8"
-        }
-        if let i = messages.firstIndex(where: { $0.id == m.id }) {
-            messages[i].failed = false
-            messages[i].delivered = false
-            messages[i].sentAt = Date()
-        }
-        sendBundle(dst: addr, contentType: ct, body: body, messageId: m.id)
-    }
-
-    /// Encode `(contentType, bytes)` parts into the shared multipart wire format.
-    static func encodeMultipart(_ parts: [(String, Data)]) -> Data {
-        var out = Data()
-        var count = UInt32(parts.count).bigEndian
-        withUnsafeBytes(of: &count) { out.append(contentsOf: $0) }
-        for (ct, body) in parts {
-            let ctd = Data(ct.utf8)
-            var cl = UInt16(ctd.count).bigEndian
-            withUnsafeBytes(of: &cl) { out.append(contentsOf: $0) }
-            out.append(ctd)
-            var bl = UInt32(body.count).bigEndian
-            withUnsafeBytes(of: &bl) { out.append(contentsOf: $0) }
-            out.append(body)
-        }
-        return out
-    }
-
-    /// Decode the shared multipart wire format into `(contentType, bytes)` parts.
-    static func decodeMultipart(_ data: Data) -> [(String, Data)] {
-        let b = [UInt8](data)
-        var i = 0
-        func u(_ n: Int) -> Int? {
-            guard i + n <= b.count else { return nil }
-            var v = 0
-            for _ in 0..<n { v = (v << 8) | Int(b[i]); i += 1 }
-            return v
-        }
-        var parts: [(String, Data)] = []
-        guard let count = u(4) else { return [] }
-        for _ in 0..<count {
-            guard let cl = u(2), i + cl <= b.count else { break }
-            let ct = String(decoding: b[i..<i + cl], as: UTF8.self); i += cl
-            guard let bl = u(4), i + bl <= b.count else { break }
-            parts.append((ct, Data(b[i..<i + bl]))); i += bl
-        }
-        return parts
-    }
+    // Outbound + inbound messaging (addContact / clearQueue / send / sendTo / sendImage / sendMultipart /
+    // retry / encodeMultipart / decodeMultipart / applyInbox) lives in HopBearer+Messaging.swift. The
+    // @Published messages/unread + contact bookkeeping stay on this class.
 
     // MARK: - Wi-Fi (MultipeerConnectivity) bearer
 
@@ -757,15 +528,15 @@ public final class HopBearer: NSObject, ObservableObject {
     // MARK: - Shared HopBearers wiring (BLE + LAN + relay through one BearerManager)
 
     /// Stand up the shared transport layer. First point the BLE transport's iOS host hooks at the
-    /// driver's existing infrastructure — the dedicated `bleQueue` (CoreBluetooth callbacks) and the
+    /// driver's existing infrastructure - the dedicated `bleQueue` (CoreBluetooth callbacks) and the
     /// long-lived `IOThread` runloop (L2CAP streams + timers), REUSED rather than spinning a second I/O
-    /// thread — and seed the background flag. Then register the bearers this ROLE wants and start. Every
+    /// thread - and seed the background flag. Then register the bearers this ROLE wants and start. Every
     /// link surfaces through `bearerSink`, which drives the node seam (`linkUp` / `deliver` / `linkDown`).
     /// `BleBearer` is pure-L2CAP by design (no GATT-data fallback). Registration is role-aware:
-    ///   • .full        — BLE (advertising) + LAN + cloud relay (if a relay is configured).
-    ///   • .centralOnly — BLE ONLY, advertising suppressed (scan/dial but stay undiscoverable): the
+    ///   • .full        - BLE (advertising) + LAN + cloud relay (if a relay is configured).
+    ///   • .centralOnly - BLE ONLY, advertising suppressed (scan/dial but stay undiscoverable): the
     ///                    headless macOS test node (hopmac). No LAN, no relay.
-    ///   • .relayOnly   — cloud relay ONLY, NO BLE (never appears on Bluetooth) and no LAN (relaymac).
+    ///   • .relayOnly   - cloud relay ONLY, NO BLE (never appears on Bluetooth) and no LAN (relaymac).
     private func startSharedBearers() {
         HopBearerBle.bleQueue = bleQueue
         HopBearerBle.bleRunLoop = IOThread.shared.runLoop
@@ -775,9 +546,9 @@ public final class HopBearer: NSObject, ObservableObject {
             bearerMgr.register(bleBearer)   // BLE (central-only suppresses advertising via config.role)
         }
         if isFull {
-            bearerMgr.register(LanBearer(myId: bearerId))   // LAN (mDNS + TCP) — full host only
+            bearerMgr.register(LanBearer(myId: bearerId))   // LAN (mDNS + TCP) - full host only
         }
-        // Cloud relay (WebSocket) as a shared bearer — ONE outbound link to the backbone, on any host that
+        // Cloud relay (WebSocket) as a shared bearer - ONE outbound link to the backbone, on any host that
         // wants a relay (full app, or the relay-only test client) with a relay configured.
         if wantsRelay, let relay = config.defaultRelay {
             bearerMgr.register(RelayBearer(relayURL: pinnedRelay ?? relay))
@@ -823,7 +594,7 @@ public final class HopBearer: NSObject, ObservableObject {
         // a different relay while the shared bearer kept its original socket (split-brain: duplicated
         // presence/traffic, confounded relay tests). The shared BearerManager has no live re-register, so
         // the pin is persisted and takes effect on next start; we do NOT open the legacy link.
-        relayStatus = "pin set — restart to switch relay"
+        relayStatus = "pin set - restart to switch relay"
     }
 
     // dialEndpoint / receiveEndpoint / endpointLink(for:) moved to HopBearer+Radios.swift (direct hops://
@@ -884,364 +655,18 @@ public final class HopBearer: NSObject, ObservableObject {
         }
     }
 
-    /// Surface received messages into the UI (main).
-    func applyInbox(_ inbox: [InboxMessage]) {
-        for m in inbox {
-            let who = nameByAddr[m.from] ?? HopBearer.shortHex(m.from)
-            let isImage = m.contentType.hasPrefix("image/")
-            let isMultipart = m.contentType == "multipart/mixed"
-            var text = isImage ? "" : (String(data: m.body, encoding: .utf8) ?? "<\(m.body.count) bytes>")
-            var images: [Data] = []
-            if isMultipart {
-                let parts = HopBearer.decodeMultipart(m.body)
-                text = parts.first(where: { $0.0.hasPrefix("text/") })
-                    .flatMap { String(data: $0.1, encoding: .utf8) } ?? ""
-                images = parts.filter { $0.0.hasPrefix("image/") }.map { $0.1 }
-            }
-            let now = HopBearer.nowMs()
-            let latency = now >= m.createdAt ? now - m.createdAt : 0  // clamp clock skew
-            messages.append(Message(peer: who, text: text, incoming: true,
-                                    peerAddr: m.from, contentType: m.contentType,
-                                    imageData: isImage ? m.body : nil, images: images,
-                                    hops: m.hops, latencyMs: latency, trace: m.trace))
-            // A sender that isn't in our nearby/contacts must still be reachable in the UI,
-            // or the message vanishes. Make them a contact (so a row + chat exist) and run
-            // hop.identify to resolve their name (their input, or their id if unset, §29).
-            if contacts[m.from] == nil {
-                contacts[m.from] = Peer(address: m.from, name: who, hops: m.hops)
-            }
-            queueIdentify(m.from)
-            if who != activePeer { unread[who, default: 0] += 1 }  // badge unless viewing
-            notifyIfBackgrounded(from: who, text: text)
-        }
-    }
+    // applyInbox(_:), which surfaces received messages into the UI, lives in HopBearer+Messaging.swift.
 
     // MARK: - hps:// pub/sub (DESIGN.md §32)
-
-    /// Host a new topic at `path`: a channel (anyone with the key reads + writes) or a service
-    /// (only we broadcast). Keys are minted + persisted in the node. Returns the service public
-    /// key for a service (empty for a channel).
-    @discardableResult
-    public func hpsRegister(path: String, channel: Bool, access: HpsAccess = .open,
-                     discoverable: Bool = false) -> Data {
-        let p = path.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { return Data() }
-        // Synchronous return to the UI (mints + persists keys): a brief core.sync. Deadlock-free — no
-        // core callback ever sync-waits back on main (they all hop to main via DispatchQueue.main.async,
-        // never .sync), so `core.sync` from main can never deadlock. It CAN still stall the UI behind
-        // whatever is queued on the serial core queue (a packet drain, a message seal); this variant
-        // exists only for the caller that genuinely needs the service pubkey inline. A caller that does
-        // NOT need the pubkey (e.g. a "Create" button that dismisses) should use `hpsRegister(..., then:)`
-        // below, which is the same async-snapshot shape as `hpsHostSnapshot` and never touches the
-        // render path with a sync.
-        let pk = core.sync {
-            node.registerService(path: p, kind: channel ? .channel : .service,
-                                 access: access, visibility: discoverable ? .discoverable : .private)
-        }
-        insertHostedTopic(p, channel: channel, access: access)
-        return pk
-    }
-
-    /// Async host-a-topic: mint + persist keys OFF the render path (on the core queue), then deliver the
-    /// service pubkey on main. Same async-snapshot shape as `hpsHostSnapshot` (apple-10) — a caller that
-    /// does not need the pubkey inline should prefer this so registration never does a `core.sync` from
-    /// the SwiftUI render path (which stalls the UI behind the core serial queue under congestion, the
-    /// 0x8BADF00D class the apple-10 mitigation removed). `then` is optional and runs on main.
-    public func hpsRegister(path: String, channel: Bool, access: HpsAccess = .open,
-                            discoverable: Bool = false, then completion: ((Data) -> Void)? = nil) {
-        let p = path.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { completion?(Data()); return }
-        // Mirror the sync path's optimistic UI insert immediately (on main), so the topic row appears
-        // without waiting on the core queue; the key mint runs async and the pubkey is delivered back.
-        insertHostedTopic(p, channel: channel, access: access)
-        core.async { [weak self] in
-            guard let self else { return }
-            let pk = self.node.registerService(path: p, kind: channel ? .channel : .service,
-                                                access: access,
-                                                visibility: discoverable ? .discoverable : .private)
-            DispatchQueue.main.async { completion?(pk) }
-        }
-    }
-
-    /// Optimistic UI insert for a topic we host (main-thread @Published mutation). Shared by both the
-    /// sync and async `hpsRegister` so the two never drift.
-    private func insertHostedTopic(_ p: String, channel: Bool, access: HpsAccess) {
-        if !hpsTopics.contains(where: { $0.host == myAddrCache && $0.path == p }) {
-            hpsTopics.insert(HpsTopic(host: myAddrCache, path: p, isChannel: channel,
-                                      hosting: true, access: access), at: 0)
-        }
-    }
-
-    /// Subscribe to `hps://{hostBase58}/{path}` — request the topic's keys from its host.
-    public func hpsSubscribe(hostBase58: String, path: String) {
-        let host = addressFromBase58(text: hostBase58.trimmingCharacters(in: .whitespacesAndNewlines))
-        let p = path.trimmingCharacters(in: .whitespaces)
-        guard host.count == 32, !p.isEmpty else { return }
-        hpsSubscribe(host: host, path: p, isChannel: true)
-    }
-
-    private func hpsSubscribe(host: Data, path: String, isChannel: Bool) {
-        core.async { [weak self] in _ = try? self?.node.hpsSubscribe(host: host, path: path) }
-        if !hpsTopics.contains(where: { $0.host == host && $0.path == path }) {
-            hpsTopics.insert(HpsTopic(host: host, path: path, isChannel: isChannel, hosting: false), at: 0)
-        }
-        pump()
-    }
-
-    /// Join a discoverable topic from a browse result.
-    public func hpsJoin(_ t: HpsTopicInfo) {
-        hpsSubscribe(host: t.host, path: t.path, isChannel: t.kind == .channel)
-    }
-
-    /// Publish text to a topic we host or (for a channel) belong to. Floods to all subscribers.
-    public func hpsPublish(topic: HpsTopic, text: String) {
-        guard !text.isEmpty, let body = text.data(using: .utf8) else { return }
-        let path = topic.path
-        core.async { [weak self] in _ = try? self?.node.hpsPublish(path: path, body: body) }
-        // Echo our own post locally — broadcasts don't loop back to the sender.
-        appendThread(topic.id, HpsMsgRow(path: topic.path, sender: myAddrCache, text: text, at: HopBearer.nowMs()))
-        pump()
-    }
-
-    /// Host → contact: invite an address to a topic we host (Invite mode).
-    public func hpsInvite(topic: HpsTopic, to address: Data) {
-        guard topic.hosting, address.count == 32 else { return }
-        let path = topic.path
-        core.async { [weak self] in _ = try? self?.node.hpsInvite(path: path, dest: address) }
-        pump()
-    }
-
-    /// Accept an invite we received — joins the topic once the host seals us the keys.
-    public func hpsAcceptInvite(_ inv: HpsInvite) {
-        let host = inv.host, path = inv.path
-        core.async { [weak self] in _ = try? self?.node.hpsAcceptInvite(host: host, path: path) }
-        hpsInvites.removeAll { $0.path == inv.path && $0.host == inv.host }
-        if !hpsTopics.contains(where: { $0.host == inv.host && $0.path == inv.path }) {
-            hpsTopics.insert(HpsTopic(host: inv.host, path: inv.path,
-                                      isChannel: inv.kind == .channel, hosting: false), at: 0)
-        }
-        pump()
-    }
-
-    public func hpsDeclineInvite(_ inv: HpsInvite) {
-        let host = inv.host, path = inv.path   // durable: won't reappear
-        core.async { [weak self] in try? self?.node.hpsDeclineInvite(host: host, path: path) }
-        hpsInvites.removeAll { $0.path == inv.path && $0.host == inv.host }
-    }
-
-    /// Host: pending join requests (RequestToJoin) for a topic. LEGACY synchronous read — do NOT call
-    /// from a SwiftUI render path; it does a `core.sync` that stalls the UI behind the core serial queue
-    /// under congestion (the apple-10 stall class). Deadlock-free (no core callback sync-waits on main),
-    /// but render-path callers should use `hpsHostSnapshot` (which fetches reach + pending + members off
-    /// the core queue in one hop) instead. Retained only for off-render-path / test callers.
-    public func hpsPending(_ topic: HpsTopic) -> [Data] { core.sync { node.hpsPending(path: topic.path) } }
-    public func hpsApprove(_ topic: HpsTopic, _ who: Data) {
-        let path = topic.path
-        core.async { [weak self] in _ = try? self?.node.hpsApprove(path: path, requester: who) }
-        pump()
-    }
-    public func hpsDeny(_ topic: HpsTopic, _ who: Data) {
-        let path = topic.path
-        core.async { [weak self] in try? self?.node.hpsDeny(path: path, requester: who) }
-    }
-    /// Host: reach (unique acking members) + the retained-member set. LEGACY synchronous reads — same
-    /// caveat as `hpsPending`: do NOT call from a SwiftUI render path (they `core.sync`). Render-path
-    /// callers should use `hpsHostSnapshot`, which reads all three off the core queue in one hop.
-    public func hpsReach(_ topic: HpsTopic) -> Int { core.sync { Int(node.hpsReach(path: topic.path)) } }
-    public func hpsMembers(_ topic: HpsTopic) -> [Data] { core.sync { node.hpsMembers(path: topic.path) } }
-
-    /// apple-10: a snapshot of a hosted topic's reach + pending join-requests + members, fetched OFF
-    /// the SwiftUI render path. The three underlying node reads run once on the core queue and the
-    /// result is delivered on main, so the channel-info sheet never does a `core.sync` inside its body
-    /// (which blocked the main thread behind the packet drain and re-created the 0x8BADF00D class of
-    /// stall under core congestion). Callers hold the result in @State and re-fetch on appear / after
-    /// a mutating action.
-    public struct HpsHostSnapshot: Equatable {
-        public var reach: Int = 0
-        public var pending: [Data] = []
-        public var members: [Data] = []
-        // Swift's synthesized memberwise init is internal even on a public struct, so the app module
-        // (ContentView, apple-10 off-core-queue snapshot) could not construct it. Expose a public one.
-        public init(reach: Int = 0, pending: [Data] = [], members: [Data] = []) {
-            self.reach = reach
-            self.pending = pending
-            self.members = members
-        }
-    }
-    public func hpsHostSnapshot(_ topic: HpsTopic, _ completion: @escaping (HpsHostSnapshot) -> Void) {
-        let path = topic.path
-        core.async { [weak self] in
-            guard let self else { return }
-            let snap = HpsHostSnapshot(reach: Int(self.node.hpsReach(path: path)),
-                                       pending: self.node.hpsPending(path: path),
-                                       members: self.node.hpsMembers(path: path))
-            DispatchQueue.main.async { completion(snap) }
-        }
-    }
-    /// Host: rotate keys, optionally removing members (revocation).
-    public func hpsRekey(_ topic: HpsTopic, remove: [Data] = []) {
-        let path = topic.path
-        core.async { [weak self] in _ = try? self?.node.hpsRekey(path: path, newPath: "", remove: remove) }
-        pump()
-    }
-
-    /// Leave / unsubscribe a topic we follow.
-    public func hpsLeave(_ topic: HpsTopic) {
-        let path = topic.path
-        core.async { [weak self] in _ = try? self?.node.hpsLeave(path: path) }
-        hpsTopics.removeAll { $0.id == topic.id }
-        hpsThreads[topic.id] = nil
-        hpsUnread[topic.id] = nil
-        pump()
-    }
-
-    /// Discover same-app topics on the mesh (decrypted descriptors). apple-r2-04: fetched OFF the main
-    /// thread (the Browse tab called this from onAppear/onChange/Refresh, and a `core.sync` from main
-    /// blocks the UI behind whatever is queued on the core serial queue, e.g. a packet drain / message
-    /// seal, so the Browse tab hitched under load). Same async-snapshot shape as `hpsHostSnapshot`: read
-    /// once on the core queue, deliver the result on main.
-    public func hpsBrowse(_ completion: @escaping ([HpsTopicInfo]) -> Void) {
-        core.async { [weak self] in
-            guard let self else { return }
-            let found = self.node.browseDiscoverable()
-            DispatchQueue.main.async { completion(found) }
-        }
-    }
-
-    /// Rebuild the channel list from the node's persisted topics (hosted + subscribed) at startup.
-    /// apple-r2-04: reads on the core queue and applies to `hpsTopics` (a main-thread @Published) back on
-    /// main, so startup never blocks the main thread behind the core serial queue.
-    private func loadHpsTopics() {
-        core.async { [weak self] in
-            guard let self else { return }
-            let mine = self.node.hpsMyTopics()
-            DispatchQueue.main.async {
-                for t in mine {
-                    let topic = HpsTopic(host: t.host, path: t.path, isChannel: t.kind == .channel,
-                                         hosting: t.hosting, access: t.access)
-                    if !self.hpsTopics.contains(where: { $0.id == topic.id }) { self.hpsTopics.append(topic) }
-                }
-            }
-        }
-    }
-
-    /// Mark a topic's thread as read (called when its screen is open).
-    public func openTopic(_ id: String) { activeTopic = id; hpsUnread[id] = 0 }
-    public func closeTopic() { activeTopic = nil }
-
-    private func appendThread(_ id: String, _ row: HpsMsgRow) {
-        hpsThreads[id, default: []].append(row)
-        if hpsThreads[id]!.count > 500 { hpsThreads[id]!.removeFirst(hpsThreads[id]!.count - 500) }
-    }
-
-    /// Apply received pub/sub messages into per-topic threads (main).
-    func applyHpsMessages(_ msgs: [HpsMessage]) {
-        for m in msgs {
-            let text = String(data: m.body, encoding: .utf8) ?? "<\(m.body.count) bytes>"
-            // Match the message to a topic we follow (by path; host is whoever we subscribed to).
-            let topic = hpsTopics.first { $0.path == m.path }
-            let id = topic?.id ?? m.path
-            appendThread(id, HpsMsgRow(path: m.path, sender: m.sender, text: text, at: HopBearer.nowMs()))
-            if id != activeTopic { hpsUnread[id, default: 0] += 1 }
-            queueIdentify(m.sender)
-        }
-    }
-
-    /// Surface new pub/sub invites (main).
-    func applyHpsInvites(_ invites: [HpsInvite]) {
-        for inv in invites {
-            if !hpsInvites.contains(where: { $0.path == inv.path && $0.host == inv.host }) {
-                hpsInvites.append(inv)
-                queueIdentify(inv.host)
-            }
-        }
-    }
+    // The hps:// pub/sub methods (register / subscribe / publish / invite / moderate / browse + the
+    // received-message + invite apply paths) live in HopBearer+Hps.swift. The @Published topic/thread/
+    // unread/invite state stays on this class; that sibling file drives the node + mutates it exactly as
+    // before.
 
     // MARK: - Services & commands (DESIGN.md §29)
-
-    /// Queue a built-in identity call to `address` (once per session per address) so we
-    /// learn its display name / a relay's domain — and can resolve it in traces. Does not
-    /// pump (safe to call from `refresh`); the next tick flushes it.
-    private func queueIdentify(_ address: Data) {
-        guard !identifyAsked.contains(address) else { return }   // main: bookkeeping
-        identifyAsked.insert(address)
-        core.async { [weak self] in
-            guard let self else { return }
-            let id = try? self.node.sendServiceRequest(dst: address, service: serviceIdentify(),
-                                                       method: "", args: Data())
-            if let id { DispatchQueue.main.async { self.identifyReqs.insert(id) } }
-        }
-    }
-
-    /// Identify `address` now (from the UI), flushing immediately.
-    public func identify(_ address: Data) {
-        queueIdentify(address)
-        pump()
-    }
-
-    /// The resolved identity (name + kind) we've learned for an address, if any.
-    public func identity(_ address: Data) -> IdentityInfo? { identities[address] }
-
-    /// Best display name for a full address: an identify name, a known peer/relay's name,
-    /// else the short address.
-    public func displayName(_ address: Data) -> String {
-        if let info = identities[address], !info.name.isEmpty { return info.name }
-        if let p = (reachable + relays + seen).first(where: { $0.address == address }) {
-            return p.name
-        }
-        return HopBearer.shortHex(address)
-    }
-
-    /// Resolve a trace hop to a display label: a known node's name (or a relay's domain),
-    /// else the carrying-app label + the hop's short address in hex (§27).
-    public func traceLabel(_ hop: TraceHopInfo) -> String {
-        if hop.node.allSatisfy({ $0 == 0 }) { return hop.appLabel }   // anonymized device hop (§27)
-        if hop.node == myShortAddr { return "you" }
-        if let name = nameByShort[hop.node], !name.isEmpty { return name }
-        return "\(hop.appLabel) \(HopBearer.hex(hop.node))"
-    }
-
-    /// Drain identify replies and custom service traffic. Identify replies update the
-    /// address book (names + relay domains); custom requests get a "not implemented"
-    /// reply so callers aren't left hanging (the demo registers no app services yet).
-    func applyServiceResponses(_ responses: [ServiceResp]) {
-        for resp in responses {
-            if identifyReqs.remove(resp.forRequestId) != nil, resp.status == 0,
-               let info = decodeIdentity(body: resp.body) {
-                identities[Data(info.address)] = info
-                let addr = Data(info.address)
-                let label = info.name.isEmpty ? HopBearer.shortHex(addr) : info.name
-                // Keep the contact's display name in sync (the chat is keyed by address,
-                // so renames are safe) — this is how an unknown sender gets its real name.
-                // A contact the user named locally keeps that alias.
-                if !userNamed.contains(addr) {
-                    nameByAddr[addr] = label
-                }
-                if let c = contacts[addr], !userNamed.contains(addr) {
-                    contacts[addr] = Peer(address: addr, name: label, hops: c.hops,
-                                          active: c.active, platform: c.platform, app: c.app)
-                }
-                serviceLog.insert("identify ← \(label) (\(info.kind))", at: 0)
-                scheduleRefresh()
-            } else {
-                let text = String(data: resp.body, encoding: .utf8) ?? "<\(resp.body.count) bytes>"
-                serviceLog.insert("service ← \(resp.status): \(text.prefix(120))", at: 0)
-            }
-        }
-    }
-
-    func applyServiceRequests(_ requests: [ServiceReq]) {
-        for req in requests {
-            // No custom services registered in the demo yet — reply 501 so the caller
-            // gets a definite answer instead of a timeout.
-            serviceLog.insert("service → \(req.service)/\(req.method) (501)", at: 0)
-            let from = req.from, reqId = req.requestId
-            core.async { [weak self] in
-                _ = try? self?.node.sendServiceResponse(to: from, forRequestId: reqId,
-                                                        status: 501, body: Data())
-            }
-        }
-    }
+    // The hop.identify round-trip (queueIdentify / identify / identity / displayName / traceLabel) and the
+    // generic service request/response drain live in HopBearer+Services.swift. The identity bookkeeping
+    // stored properties stay on this class; that sibling file drives them exactly as before.
 
     // Open-web HTTP fetch via a third-party gateway was removed: a gateway that fetches
     // https:// on your behalf terminates TLS = a MitM (DESIGN.md §25). The model is now
@@ -1249,156 +674,9 @@ public final class HopBearer: NSObject, ObservableObject {
     // service over the mesh, no third party in the middle).
 
     // MARK: - HNS & hops:// (DESIGN.md §30)
-
-    /// Open a `hops://<domain>/<path>` URL (a bare `<domain>` is also accepted). Resolves
-    /// the domain to its hops endpoint address via the Hop Name System, then sends a GET
-    /// over the mesh. The endpoint validates `host`, so we always pass the bare domain.
-    public func openHops(_ urlString: String) {
-        let (domain, path) = Self.parseHops(urlString)
-        guard !domain.isEmpty else {
-            hopsResults["?"] = "error: not a hops:// url"
-            return
-        }
-        hopsResults[domain] = "resolving…"
-        core.async { [weak self] in
-            guard let self else { return }
-            let res = self.node.resolveHns(domain: domain)
-            DispatchQueue.main.async {
-                switch res {
-                case .cached(let address):
-                    if address.isEmpty {
-                        // A cached negative — the domain has no `_hopaddress` record.
-                        self.hopsResults[domain] = "error: no hops endpoint for \(domain)"
-                    } else {
-                        self.fireHops(domain: domain, path: path, endpoint: address)
-                    }
-                case .pending:
-                    // A lookup was kicked off — our own DNS (if we have internet) or a query
-                    // broadcast to connected peers. Fire when its record lands in takeHnsResults().
-                    self.pendingHops[domain] = path
-                case .needsResolver:
-                    // Genuinely isolated: no internet AND no connected peers to resolve through.
-                    self.hopsResults[domain] = "error: offline — no internet or peers to resolve \(domain)"
-                }
-                self.pump()
-            }
-        }
-    }
-
-    // fireHops(domain:path:endpoint:) moved to HopBearer+Radios.swift (dials an endpoint + sends over the
-    // network; excluded from the coverage denominator).
-
-    // MARK: - hops:// for the WebView (callback-style, per-resource)
-
-    /// One hops:// HTTP response handed to the WebView's scheme handler.
-    public struct HopResponse {
-        public let status: Int
-        public let contentType: String
-        public let body: Data
-    }
-
-    /// Fetch a single hops:// resource (the WebView's document or any sub-resource) and call
-    /// `completion` when the sealed response returns over the mesh. Resolves the domain via
-    /// HNS (cached after the first hit, so sub-resources fire immediately), dials the endpoint
-    /// if needed, and times out gracefully. Drives everything on the main queue.
-    public func hopsFetch(domain: String, path: String, completion: @escaping (HopResponse) -> Void) {
-        guard !domain.isEmpty else {
-            completion(HopResponse(status: 400, contentType: "text/plain; charset=utf-8", body: Data("bad hops url".utf8)))
-            return
-        }
-        core.async { [weak self] in
-            guard let self else { return }
-            let res = self.node.resolveHns(domain: domain)
-            DispatchQueue.main.async {
-                switch res {
-                case .cached(let address):
-                    if address.isEmpty {
-                        completion(HopResponse(status: 502, contentType: "text/plain; charset=utf-8",
-                                               body: Data("no hops endpoint for \(domain)".utf8)))
-                    } else {
-                        self.fireHopsWeb(domain: domain, path: path, endpoint: address, completion: completion)
-                    }
-                case .pending:
-                    // Our own DNS, or (no internet) a query broadcast to connected peers (§30).
-                    self.hopsWebPending[domain, default: []].append((path, completion))
-                case .needsResolver:
-                    completion(HopResponse(status: 503, contentType: "text/plain; charset=utf-8",
-                                           body: Data("offline — no internet or peers to resolve \(domain)".utf8)))
-                }
-                self.pump()
-            }
-        }
-    }
-
-    // fireHopsWeb(domain:path:endpoint:completion:) moved to HopBearer+Radios.swift (dials an endpoint +
-    // sends over the network; excluded from the coverage denominator).
-
-    /// Split `hops://<domain>/<path>` (or a bare `<domain>`) into (domain, path). The path
-    /// defaults to "/" and is path+query only — what `sendHopsRequest` expects.
-    // Internal (not private) so the pure hops:// URL split (strip scheme, split domain/path, default the
-    // path to "/") is unit-testable without a node or a live fetch.
-    static func parseHops(_ raw: String) -> (domain: String, path: String) {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = s.range(of: "hops://") { s.removeSubrange(s.startIndex..<r.upperBound) }
-        guard let slash = s.firstIndex(of: "/") else { return (s, "/") }
-        let domain = String(s[s.startIndex..<slash])
-        let path = String(s[slash...])
-        return (domain, path.isEmpty ? "/" : path)
-    }
-
-    /// Drain finished HNS resolutions (firing any queued hops:// fetch) and hops:// HTTP
-    /// responses (matching them back to the in-flight request). The core caches records,
-    /// so we keep no extra cache here. Also service the host DNS hook: any `_hopaddress`
-    /// TXT lookups the node needs are resolved over DNS-over-HTTPS off the main queue and
-    /// fed back via `provideDnsAnswer` (DESIGN.md §30).
-    func applyHnsResults(_ results: [HnsRecord]) {
-        for rec in results {
-            // The manual text-box fetch (one path per domain).
-            if let path = pendingHops.removeValue(forKey: rec.domain) {
-                if rec.address.isEmpty {
-                    hopsResults[rec.domain] = "error: no hops endpoint for \(rec.domain)"
-                } else {
-                    fireHops(domain: rec.domain, path: path, endpoint: rec.address)
-                }
-            }
-            // WebView fetches queued on this domain's resolution (may be several).
-            if let queued = hopsWebPending.removeValue(forKey: rec.domain) {
-                for (path, completion) in queued {
-                    if rec.address.isEmpty {
-                        completion(HopResponse(status: 502, contentType: "text/plain; charset=utf-8",
-                                               body: Data("no hops endpoint for \(rec.domain)".utf8)))
-                    } else {
-                        fireHopsWeb(domain: rec.domain, path: path, endpoint: rec.address,
-                                    completion: completion)
-                    }
-                }
-            }
-        }
-    }
-
-    func applyHttpResponses(_ responses: [HttpResp]) {
-        for resp in responses {
-            // WebView completion (per-resource) takes priority over the text box.
-            if let completion = hopsWebReqs.removeValue(forKey: resp.forRequestId) {
-                completion(HopResponse(status: Int(resp.status),
-                                       contentType: resp.contentType, body: resp.body))
-                continue
-            }
-            guard let domain = hopsReqs.removeValue(forKey: resp.forRequestId) else { continue }
-            let text = String(data: resp.body, encoding: .utf8) ?? "<\(resp.body.count) bytes>"
-            hopsResults[domain] = "\(resp.status) · \(text)"
-        }
-    }
-
-    /// Host DNS hook (DESIGN.md §30): for each domain the node wants resolved, fetch its full DNSSEC
-    /// chain over DoH and hand core the raw response bodies — core validates the chain to the root
-    /// anchors and decides the address; the app never does.
-    func applyDnsLookups(_ domains: [String]) {
-        for domain in domains { fetchDnssecChain(domain) }
-    }
-
-    // fetchDnssecChain(_:) moved to HopBearer+Radios.swift (real DNS-over-HTTPS network I/O; excluded from
-    // the coverage denominator).
+    // The HNS + hops:// node-driving methods (openHops / hopsFetch / parseHops + the applyHnsResults /
+    // applyHttpResponses / applyDnsLookups drains) live in HopBearer+Hns.swift. The network-bound senders
+    // (fireHops / fireHopsWeb / fetchDnssecChain) stay in HopBearer+Radios.swift.
 
     /// The chat for `peer` is on screen: clear its badge and stop counting it.
     public func openChat(_ peer: String) { activePeer = peer; unread[peer] = 0 }
@@ -1420,38 +698,18 @@ public final class HopBearer: NSObject, ObservableObject {
         #endif
     }
 
-    // MARK: - Message history persistence (survives app restart)
+    // MARK: - Persistence (delegated to MirrorStore)
+    //
+    // The on-disk UI-history mirror (messages/channels/contacts.json) + the TEST/AUTOMATION plaintext dump
+    // are owned by `MirrorStore` (pure file I/O + Codable DTOs + write policy). HopBearer keeps only the
+    // pieces coupled to its @Published state: the debounce/throttle timers and the `loadingMessages` guard
+    // that suppresses save-on-load. The static forwarders below preserve the existing test/host API surface
+    // (`HopBearer.messagesFileURL` / `.uiMirrorProtection` / `.automationMirrorEnabled`).
 
-    /// On-disk form of a chat message. Omits `trace` (FFI type, incoming-path debug only) but KEEPS
-    /// `bundleId`: the node persists undelivered own-bundles and keeps spraying them after a restart
-    /// (node.rs rehydrate), and for an established session the bundle id is stable, so we re-query
-    /// `messageStatus(bundleId)` on relaunch and the message flips to Delivered when its ACK lands.
-    private struct StoredMessage: Codable {
-        var peer: String; var text: String; var incoming: Bool
-        var peerAddr: Data?; var contentType: String
-        var imageData: Data?; var images: [Data]
-        var hops: UInt8; var latencyMs: UInt64?
-        var sentAt: Date; var deliveredAt: Date?
-        var relayed: UInt32; var delivered: Bool; var deliveryHops: UInt8; var failed: Bool
-        var bundleId: Data?
-    }
-
-    /// apple-r2-03: the write options for the plaintext UI-history mirrors (messages/channels/contacts).
-    /// These are appended to on an INBOUND receive, which can happen while the device is LOCKED in the
-    /// background (background BLE/relay wake). `.completeFileProtection` DENIES writes while locked, so a
-    /// locked background receive would fail to persist and, since `takeInbox` already drained the node
-    /// inbox into the in-memory array, the message could vanish from the UI on the next relaunch (a
-    /// user-visible history gap; the SQLCipher node store still has it, but the chat list reads this
-    /// mirror). `.completeFileProtectionUntilFirstUserAuthentication` (the `Data.WritingOptions` spelling
-    /// of NSFileProtectionCompleteUntilFirstUserAuthentication) keeps the bytes encrypted at rest yet lets
-    /// the write SUCCEED any time after the first post-boot unlock, so a locked background receive
-    /// persists. The node store (hop.db) remains the source of truth; this only closes the mirror gap.
-    static let uiMirrorProtection: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-
-    static var messagesFileURL: URL {   // internal (not private): the apple-r3-01 flush test reads it
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("messages.json")
-    }
+    /// apple-r2-03 write options for the UI-history mirrors (see `MirrorStore.uiMirrorProtection`).
+    static var uiMirrorProtection: Data.WritingOptions { MirrorStore.uiMirrorProtection }
+    /// The chat-history mirror path (the apple-r3-01 flush test reads it).
+    static var messagesFileURL: URL { MirrorStore.messagesFileURL }
 
     /// Coalesce rapid mutations into one disk write (≤1 write/sec) so appending a burst of
     /// messages doesn't re-encode the whole history each time.
@@ -1485,90 +743,27 @@ public final class HopBearer: NSObject, ObservableObject {
     }
 
     func saveMessages() {
-        let stored = messages.map {
-            StoredMessage(peer: $0.peer, text: $0.text, incoming: $0.incoming,
-                          peerAddr: $0.peerAddr, contentType: $0.contentType,
-                          imageData: $0.imageData, images: $0.images,
-                          hops: $0.hops, latencyMs: $0.latencyMs,
-                          sentAt: $0.sentAt, deliveredAt: $0.deliveredAt,
-                          relayed: $0.relayed, delivered: $0.delivered,
-                          deliveryHops: $0.deliveryHops, failed: $0.failed,
-                          bundleId: $0.bundleId)
-        }
-        guard let data = try? JSONEncoder().encode(stored) else { return }
-        // apple-04/apple-r2-03: encrypt this history at rest (so plaintext chat + image bytes don't sit
-        // unprotected beside the SQLCipher hop.db or leak via a device backup), but with
-        // completeFileProtectionUntilFirstUnlock so a locked background receive can still persist (see
-        // uiMirrorProtection). No-op on macOS (no data protection), effective on iOS.
-        try? data.write(to: HopBearer.messagesFileURL, options: HopBearer.uiMirrorProtection)
+        MirrorStore.saveMessages(messages)
         writeAutomationDump()   // TEST/AUTOMATION: mirror self-addr + rx/tx for the headless harness
     }
 
-    // MARK: - Automation control surface (TEST/AUTOMATION hook — headless harness only)
+    // MARK: - Automation control surface (TEST/AUTOMATION hook - headless harness only)
 
-    /// A PLAINTEXT mirror of our self-address + recent rx/tx, written to `Documents/automation.json`.
-    /// The encrypted hop.db has no plaintext mirror, so this is the ONLY way an external test harness
-    /// (which pulls the file via `xcrun devicectl device copy from`) can discover this device's
-    /// address (`self`) for targeting and verify iOS-side message receipt. Not a normal user path.
-    private struct AutomationDump: Codable {
-        struct Rx: Codable { let from: String; let text: String; let at: Int64 }
-        struct Tx: Codable { let to: String; let text: String; let delivered: Bool; let deliveryMs: UInt32; let at: Int64 }
-        let `self`: String
-        let name: String
-        let rx: [Rx]
-        let tx: [Tx]
-        let auto: String   // TEST/AUTOMATION breadcrumb: the raw HOP_AUTO launch env this process saw ("" if none)
-    }
     /// TEST/AUTOMATION: the HOP_AUTO launch env this process observed at init, mirrored into the dump so
     /// the harness can confirm the env actually reached the app (vs a silent send failure). Not a user path.
     public static var autoEnvSeen: String = ""
-    static var automationFileURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("automation.json")
-    }
-    /// apple-04/apple-r2-03: the plaintext-mirror GATE, pure + testable. A plaintext automation.json (self
-    /// address + recent messages) defeats SQLCipher-at-rest if it ships, so it is written ONLY when this is
-    /// a DEBUG build OR the process was launched under the harness (a HOP_AUTO env real users never set).
-    /// The critical invariant, which the test pins: a RELEASE build with no HOP_AUTO returns false, so the
-    /// mirror is NEVER written in a shipped app.
+    /// The plaintext-mirror GATE, pure + testable (see `MirrorStore.automationMirrorEnabled`). Forwarded so
+    /// the existing test pins `HopBearer.automationMirrorEnabled(isDebug:hopAutoEnv:)` are unchanged.
     static func automationMirrorEnabled(isDebug: Bool, hopAutoEnv: String?) -> Bool {
-        return isDebug || (hopAutoEnv != nil)
-    }
-    static var automationMirrorEnabled: Bool {
-        #if DEBUG
-        let isDebug = true
-        #else
-        let isDebug = false
-        #endif
-        return automationMirrorEnabled(isDebug: isDebug,
-                                       hopAutoEnv: ProcessInfo.processInfo.environment["HOP_AUTO"])
+        MirrorStore.automationMirrorEnabled(isDebug: isDebug, hopAutoEnv: hopAutoEnv)
     }
     /// Rewrite the automation mirror (last ~100 rx + tx). Called on every message change (from
     /// `saveMessages`) and once at startup so `self` is discoverable even before any traffic.
     func writeAutomationDump() {
-        guard HopBearer.automationMirrorEnabled else { return }   // apple-04: never a plaintext mirror in shipped release
-        let rx = messages.filter { $0.incoming }.suffix(100).map {
-            AutomationDump.Rx(from: $0.peerAddr.map(HopBearer.base58) ?? $0.peer,
-                              text: $0.text, at: Int64($0.sentAt.timeIntervalSince1970 * 1000))
-        }
-        let tx = messages.filter { !$0.incoming }.suffix(100).map {
-            AutomationDump.Tx(to: $0.peerAddr.map(HopBearer.base58) ?? $0.peer,
-                              text: $0.text, delivered: $0.delivered, deliveryMs: $0.deliveryMs,
-                              at: Int64($0.sentAt.timeIntervalSince1970 * 1000))
-        }
-        let dump = AutomationDump(self: myAddress, name: myName, rx: Array(rx), tx: Array(tx),
-                                  auto: HopBearer.autoEnvSeen)
-        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? enc.encode(dump) else { return }
-        // completeFileProtection even for the debug/harness mirror (defense in depth; harness reads it
-        // over devicectl while the device is unlocked).
-        try? data.write(to: HopBearer.automationFileURL, options: [.atomic, .completeFileProtection])
+        MirrorStore.writeAutomationDump(messages: messages, myAddress: myAddress,
+                                        myName: myName, autoEnvSeen: HopBearer.autoEnvSeen)
     }
 
-    private static var channelsFileURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("channels.json")
-    }
     private func scheduleChannelSave() {
         guard !loadingMessages else { return }
         channelSaveWork?.cancel()
@@ -1576,47 +771,28 @@ public final class HopBearer: NSObject, ObservableObject {
         channelSaveWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
-    func saveChannels() {
-        guard let data = try? JSONEncoder().encode(hpsThreads) else { return }
-        try? data.write(to: HopBearer.channelsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
-    }
+    func saveChannels() { MirrorStore.saveChannels(hpsThreads) }
     func loadChannels() {
-        guard let data = try? Data(contentsOf: HopBearer.channelsFileURL),
-              let stored = try? JSONDecoder().decode([String: [HpsMsgRow]].self, from: data) else { return }
+        guard let stored = MirrorStore.loadChannels() else { return }
         loadingMessages = true
         hpsThreads = stored
         loadingMessages = false
     }
 
     func loadMessages() {
-        guard let data = try? Data(contentsOf: HopBearer.messagesFileURL),
-              let stored = try? JSONDecoder().decode([StoredMessage].self, from: data) else { return }
+        guard let restored = MirrorStore.loadMessages() else { return }
         loadingMessages = true
-        // An outgoing message still in flight when we quit KEEPS sending: the node persists the
-        // bundle and re-sprays it after restart until its delivery ACK (node.rs rehydrate). So we
-        // restore it in-flight with its bundleId — refresh() re-queries messageStatus and it flips
-        // to Delivered when the ACK lands — rather than falsely marking it "Not sent".
-        messages = stored.map { s in
-            Message(peer: s.peer, text: s.text, incoming: s.incoming, peerAddr: s.peerAddr,
-                    contentType: s.contentType, imageData: s.imageData, images: s.images,
-                    bundleId: s.bundleId,
-                    hops: s.hops, latencyMs: s.latencyMs, sentAt: s.sentAt,
-                    deliveredAt: s.deliveredAt, relayed: s.relayed, delivered: s.delivered,
-                    deliveryHops: s.deliveryHops, failed: s.failed)
-        }
+        // An outgoing message still in flight when we quit KEEPS sending: the node persists the bundle and
+        // re-sprays it after restart until its delivery ACK (node.rs rehydrate). MirrorStore restores it
+        // in-flight with its bundleId - refresh() re-queries messageStatus and it flips to Delivered when
+        // the ACK lands - rather than falsely marking it "Not sent".
+        messages = restored
         loadingMessages = false
     }
 
     // MARK: - Address book persistence (past conversations survive restart + going out of range)
 
-    private struct StoredContact: Codable { var address: Data; var name: String; var platform: String; var app: String }
-    private static var contactsFileURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("contacts.json")
-    }
     private var lastContactSaveAt = Date.distantPast
-    /// Persist the address book, throttled (refresh runs often). Anyone we've seen, messaged, or
-    /// been messaged by is kept, so their conversation is reachable even when offline / out of range.
     /// Add a peer to the address book and persist immediately (e.g. on send / manual add) so the
     /// conversation is reachable even if we quit before the next throttled save.
     public func rememberContact(_ peer: Peer) {
@@ -1624,23 +800,18 @@ public final class HopBearer: NSObject, ObservableObject {
         nameByAddr[peer.address] = peer.name
         saveContacts(force: true)
     }
+    /// Persist the address book, throttled (refresh runs often). Anyone we've seen, messaged, or been
+    /// messaged by is kept, so their conversation is reachable even when offline / out of range. The
+    /// throttle decision stays here (owns `lastContactSaveAt`); MirrorStore does the snapshot + async write.
     func saveContacts(force: Bool = false) {
         guard force || Date().timeIntervalSince(lastContactSaveAt) > 4 else { return }
         lastContactSaveAt = Date()
-        let snapshot = contacts.values.map {
-            StoredContact(address: $0.address, name: $0.name, platform: $0.platform, app: $0.app)
-        }
-        DispatchQueue.global(qos: .utility).async {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: HopBearer.contactsFileURL, options: HopBearer.uiMirrorProtection)  // apple-04/apple-r2-03
-        }
+        MirrorStore.saveContacts(Array(contacts.values))
     }
     func loadContacts() {
-        guard let data = try? Data(contentsOf: HopBearer.contactsFileURL),
-              let stored = try? JSONDecoder().decode([StoredContact].self, from: data) else { return }
-        for c in stored where contacts[c.address] == nil {
-            contacts[c.address] = Peer(address: c.address, name: c.name, hops: 0,
-                                       active: false, platform: c.platform, app: c.app)
+        guard let loaded = MirrorStore.loadContacts() else { return }
+        for c in loaded where contacts[c.address] == nil {
+            contacts[c.address] = c
             nameByAddr[c.address] = c.name
         }
     }
@@ -1648,11 +819,12 @@ public final class HopBearer: NSObject, ObservableObject {
     private var refreshScheduled = false
 
     /// Coalesced UI refresh. `refresh()` does synchronous SQLite work (browse, queue, per-message
-    /// status) and is far too expensive to run on every `pump()` — which fires on every received
+    /// status) and is far too expensive to run on every `pump()` - which fires on every received
     /// packet across BLE/Wi-Fi/LAN/relay. Running it per-packet saturates the main thread (watchdog
     /// 0x8BADF00D + cpu_resource kills, sluggish UI). Coalesce to ~4 Hz; the hot path still drains
-    /// outgoing and the inbox immediately, only the heavy snapshot is throttled.
-    private func scheduleRefresh() {
+    /// outgoing and the inbox immediately, only the heavy snapshot is throttled. Internal (not private) so
+    /// the sibling extension files (Services) can request a coalesced refresh after mutating shared state.
+    func scheduleRefresh() {
         // Callable from any thread (link callbacks fire off-main); `refreshScheduled` is main-only.
         onMain { [self] in
             guard !refreshScheduled else { return }
@@ -1665,7 +837,7 @@ public final class HopBearer: NSObject, ObservableObject {
         }
     }
 
-    /// One node-read snapshot for `refresh` — gathered entirely on `core`, applied on main.
+    /// One node-read snapshot for `refresh` - gathered entirely on `core`, applied on main.
     struct RefreshSnapshot {
         let browse: [ServiceHit]
         let peerLinks: [PeerLink]
@@ -1702,59 +874,31 @@ public final class HopBearer: NSObject, ObservableObject {
 
     /// Apply a node-read snapshot to @Published state + bookkeeping (main).
     func applyRefresh(_ snap: RefreshSnapshot) {
-        // Discover peers by browsing the app-level "presence" service. A device may
-        // re-publish several presence adverts (one per refresh); collapse to one per
-        // address, keeping the nearest hop count — the contact-book logic the
-        // protocol no longer carries (DESIGN.md §23).
-        // Collapse the many retained presence adverts per publisher: nearest hops for
-        // distance, newest advert (max createdAt) for current name/state/platform/app.
-        struct Agg { var minHops: UInt8; var newestAt: UInt64; var peer: Peer }
-        var agg = [Data: Agg]()
-        for p in snap.browse {
-            let name = p.title.isEmpty ? HopBearer.shortHex(p.publisher) : p.title
-            let parts = p.summary.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-            let active = parts.indices.contains(0) ? parts[0] != "bg" : true
-            let platform = parts.indices.contains(1) ? parts[1] : ""
-            let app = parts.indices.contains(2) ? parts[2] : ""
-            let hops = agg[p.publisher].map { min($0.minHops, p.hops) } ?? p.hops
-            if let ex = agg[p.publisher], p.createdAt < ex.newestAt {
-                agg[p.publisher] = Agg(minHops: hops, newestAt: ex.newestAt, peer: ex.peer) // older: just refresh hops
-            } else {
-                let peer = Peer(address: p.publisher, name: name, hops: hops,
-                                active: active, platform: platform, app: app)
-                agg[p.publisher] = Agg(minHops: hops, newestAt: p.createdAt, peer: peer)
-            }
-            nameByAddr[p.publisher] = name
-        }
-        var byAddr = [Data: Peer]()
-        for (addr, a) in agg {
-            var peer = a.peer
-            peer = Peer(address: addr, name: peer.name, hops: a.minHops,
-                        active: peer.active, platform: peer.platform, app: peer.app)
-            byAddr[addr] = peer
-        }
-        // Sort by the stable address, not last-seen hops/name — otherwise rows jump around as
-        // hop counts fluctuate and generic names ("iPhone"/"iPad") tie. Address is fixed, so a
-        // peer keeps its position.
-        reachable = byAddr.values.sorted { $0.address.lexicographicallyPrecedes($1.address) }
+        // Discover peers by browsing the app-level "presence" service. A device may re-publish several
+        // presence adverts (one per refresh); RefreshMapper collapses them to one row per address (nearest
+        // hop count for distance, newest advert for name/state) - the contact-book logic the protocol no
+        // longer carries (DESIGN.md §23). Sorted by the stable address so rows don't jump as hops/names churn.
+        let (reachablePeers, names) = RefreshMapper.aggregatePresence(snap.browse)
+        for (addr, name) in names { nameByAddr[addr] = name }
+        reachable = reachablePeers
 
         // Accumulate everyone we've ever seen into the (persisted) contact book; those not
-        // currently reachable form the "seen" list — reachable across restarts + out-of-range.
-        for (addr, peer) in byAddr { contacts[addr] = peer }
-        let here = Set(byAddr.keys)
+        // currently reachable form the "seen" list - reachable across restarts + out-of-range.
+        for peer in reachable { contacts[peer.address] = peer }
+        let here = Set(reachable.map { $0.address })
         seen = contacts.filter { !here.contains($0.key) }
             .map { Peer(address: $0.key, name: $0.value.name, hops: 0,
                         active: false, platform: $0.value.platform, app: $0.value.app) }
             .sorted { $0.address.lexicographicallyPrecedes($1.address) }
-        saveContacts()   // throttled — persist the address book
+        saveContacts()   // throttled - persist the address book
 
-        // Forward-secret sessions (lock icon) + learned live routes (§27) — computed on core.
+        // Forward-secret sessions (lock icon) + learned live routes (§27) - computed on core.
         secured = snap.secured
         routed = snap.routed
 
-        // Per-transport status — several bearers run at once (DESIGN.md §26). The headline
+        // Per-transport status - several bearers run at once (DESIGN.md §26). The headline
         // count is the *actual transport-level connections* (what the user means by
-        // "linked"), not just handshake-complete Hop links — otherwise a peer that's
+        // "linked"), not just handshake-complete Hop links - otherwise a peer that's
         // connected but mid-Noise-handshake shows as zero. The expandable list below
         // shows the identified peers (and notes any still establishing).
         // MC keeps its session object even when Wi-Fi is off; trust the real radio (or
@@ -1763,19 +907,15 @@ public final class HopBearer: NSObject, ObservableObject {
         let p2pActive = !wifiBlocked && (wifiUp || !mcPeerByLink.isEmpty)
         let pls = snap.peerLinks
         // The shared bearers mint links through the BearerManager (baseLinkId 1_000_000+), NOT any legacy
-        // radio object, so per-transport status comes from the manager's live links — each short tag mapped
+        // radio object, so per-transport status comes from the manager's live links - each short tag mapped
         // to its display id. Multipeer (Peer-to-Peer) is not a shared bearer, so it's added separately.
         let active = bearerMgr.activeTransports()          // short tag → live link count
-        var ts: [TransportStatus] = []
-        if let n = active["BT"]    { ts.append(TransportStatus(id: "Bluetooth", active: true, links: n)) }
-        ts.append(TransportStatus(id: "Peer-to-Peer", active: p2pActive, links: mcPeerByLink.count))
-        if let n = active["LAN"]   { ts.append(TransportStatus(id: "Local Net", active: true, links: n)) }
-        if let n = active["Relay"] { ts.append(TransportStatus(id: "Relay", active: true, links: n)) }
-        transports = ts
+        transports = RefreshMapper.transportStatuses(active: active, p2pActive: p2pActive,
+                                                     p2pLinks: mcPeerByLink.count)
 
         // Map each direct neighbour to the transport(s) carrying it (the route). Shared-bearer links are
         // minted by the BearerManager (baseLinkId 1_000_000+), so the legacy link-id ranges can't tag
-        // them — ask the manager for the owning bearer's REAL transport first, then fall back to the
+        // them - ask the manager for the owning bearer's REAL transport first, then fall back to the
         // legacy ranges for any link the node still mints itself (Multipeer, legacy relay/endpoints).
         var lt = [Data: Set<String>]()
         for pl in pls {
@@ -1783,19 +923,14 @@ public final class HopBearer: NSObject, ObservableObject {
             if bearerLinksContains(pl.link), let tag = bearerMgr.transportName(of: pl.link) {
                 t = tag                          // shared bearer: real transport ("BT"/"LAN"/"Relay")
             } else {
-                switch pl.link {
-                case ..<10_000:  t = "BT"
-                case ..<20_000:  t = "P2P"       // MultipeerConnectivity / AWDL — peer-to-peer Wi-Fi, no router
-                case ..<40_000:  t = "Relay"     // relay (20k) + hops:// endpoints (30k) aren't local
-                default:          t = "LAN"        // 40k+ = LAN TCP over a shared network (mDNS)
-                }
+                t = RefreshMapper.legacyTransportTag(pl.link)   // node-minted link (Multipeer / legacy)
             }
             lt[pl.address, default: []].insert(t)
         }
         linkTransports = lt
 
         // A live local radio link (BLE / Wi-Fi P2P) IS a 1-hop path, so force the hop count to 1
-        // for those peers — even if a stale presence advert arrived via the relay at 2 hops. This
+        // for those peers - even if a stale presence advert arrived via the relay at 2 hops. This
         // keeps "direct" honest: a peer is direct iff hops <= 1, so a live-linked peer shows
         // "1 hop · BT" (never "2 hops"), and a peer with no live link at 2 hops stays in the mesh.
         reachable = reachable.map { p in
@@ -1821,9 +956,9 @@ public final class HopBearer: NSObject, ObservableObject {
         }
         .sorted { $0.name < $1.name }
 
-        // Connected hops:// endpoints (the directly-dialed origin links, the legacy 30_000–39_999
+        // Connected hops:// endpoints (the directly-dialed origin links, the legacy 30_000-39_999
         // range). NOT the relay backbone; we reach them straight (DESIGN.md §30). Bounded to that
-        // range so the new shared-bearer links (BearerManager baseLinkId 1_000_000+ — ordinary
+        // range so the new shared-bearer links (BearerManager baseLinkId 1_000_000+ - ordinary
         // BLE/LAN peers) are NOT misclassified as endpoints. Named by the domain via hop.identify.
         endpoints = pls.filter { (30_000..<40_000).contains($0.link) }.map { pl in
             let name = identities[pl.address]?.name.isEmpty == false
@@ -1843,15 +978,9 @@ public final class HopBearer: NSObject, ObservableObject {
         for (addr, name) in nameByAddr { ns[HopBearer.shortData(addr)] = name }
         nameByShort = ns
 
-        queue = snap.queue.map {
-            QueueRow(id: $0.id, own: $0.own,
-                     to: $0.to.isEmpty ? "broadcast" : HopBearer.shortHex($0.to),
-                     priority: $0.priority, hops: $0.hops)
-        }
+        queue = RefreshMapper.mapQueue(snap.queue)
         // Live HNS cache snapshot (ticks down each refresh as the node clock advances, §30).
-        hnsCache = snap.hnsCache.map {
-            HnsCacheRow(domain: $0.domain, address: $0.address, ttl: $0.ttlSecs)
-        }
+        hnsCache = RefreshMapper.mapHnsCache(snap.hnsCache)
         if reachable.count != lastReachLog { NSLog("HOPLOG reachable=\(reachable.count)"); lastReachLog = reachable.count }
         let relayN = queue.filter { !$0.own }.count
         if relayN != lastRelayLog { NSLog("HOPLOG relayQueue=\(relayN) total=\(queue.count)"); lastRelayLog = relayN }
@@ -1888,7 +1017,7 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Compact base58 prefix for display (full base58 via `addressBase58`).
     public static func shortHex(_ d: Data) -> String { String(addressBase58(address: d).prefix(8)) }
     static func base58(_ d: Data) -> String { addressBase58(address: d) }
-    /// The 8-byte short form of a full address — matches what trace hops carry (§27).
+    /// The 8-byte short form of a full address - matches what trace hops carry (§27).
     static func shortData(_ d: Data) -> Data { shortAddress(address: d) }
     /// Hex of an arbitrary byte string (for an unresolved short trace hop).
     static func hex(_ d: Data) -> String { d.map { String(format: "%02x", $0) }.joined() }

@@ -1,6 +1,6 @@
-// relaymac — a headless macOS Hop client that drives the HopDriver runtime in RELAY-ONLY mode
-// (`role: .relayOnly`): it connects ONLY the cloud relay — NO BLE (no advertise/scan), no LAN, no
-// Wi-Fi — so it never appears on Bluetooth and the ONLY path to a peer is the relay. Used to test
+// relaymac - a headless macOS Hop client that drives the HopDriver runtime in RELAY-ONLY mode
+// (`role: .relayOnly`): it connects ONLY the cloud relay - NO BLE (no advertise/scan), no LAN, no
+// Wi-Fi - so it never appears on Bluetooth and the ONLY path to a peer is the relay. Used to test
 // the relay routing path in isolation (it stands in for a remote sender): it sends a §39 PRIVATE
 // message to a target address over the relay and reports whether it routes + Delivers.
 //
@@ -23,11 +23,11 @@ let config = HopBearer.Config(
     appSecret: HopBearer.appSecret,
     displayName: "MacRelayOnly",
     defaultRelay: HopBearer.defaultRelay,   // wss://relay.hopme.sh/
-    role: .relayOnly)                       // relay and NOTHING else — no BLE/LAN/Wi-Fi (role-enforced)
+    role: .relayOnly)                       // relay and NOTHING else - no BLE/LAN/Wi-Fi (role-enforced)
 
 let bearer = HopBearer(config: config)
 bearer.start(name: "MacRelayOnly")          // also publishes our prekey (so the private ACK can seal back)
-log("relay-only client up — addr \(bearer.myAddress.prefix(8)) → target \(target.prefix(8)) marker=\(marker)")
+log("relay-only client up - addr \(bearer.myAddress.prefix(8)) → target \(target.prefix(8)) marker=\(marker)")
 
 var sent = false
 var ticks = 0
@@ -47,6 +47,6 @@ Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
     if ticks % 3 == 0 {
         log("status: relay=\(rs) reachable=\(bearer.reachable.count) secured=\(bearer.secured.count) delivered=\(delivered)")
     }
-    if delivered { log("DELIVERED — relay→device routing works (P4)"); exit(0) }
+    if delivered { log("DELIVERED - relay→device routing works (P4)"); exit(0) }
 }
 RunLoop.main.run()

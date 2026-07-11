@@ -1,7 +1,7 @@
-// hopmac — a headless macOS Hop node that drives the HopDriver runtime in BLE-central-only mode,
+// hopmac - a headless macOS Hop node that drives the HopDriver runtime in BLE-central-only mode,
 // for testing cross-platform BLE end-to-end from a controllable Mac instead of debugging iPhones.
 //
-// It runs the REAL hop-core (via the HopDriver package) and the SAME bearer the iOS app uses — just
+// It runs the REAL hop-core (via the HopDriver package) and the SAME bearer the iOS app uses - just
 // configured `.centralOnly`: BLE central scanning + the node, no advertising / Wi-Fi / LAN / relay /
 // beacon. It connects to Hop peripherals over L2CAP exactly like the app's central path, then sends a
 // test message to each peer it reaches and prints anything received.
@@ -30,7 +30,7 @@ let config = HopBearer.Config(
 
 let bearer = HopBearer(config: config)
 bearer.start(name: "MacHopTest")
-log("hopmac started (central-only) — address \(bearer.myAddress.prefix(8)); Ctrl-C to quit")
+log("hopmac started (central-only) - address \(bearer.myAddress.prefix(8)); Ctrl-C to quit")
 
 // Message each peer we reach once, and surface incoming messages + link state.
 var sentTo = Set<Data>()

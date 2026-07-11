@@ -606,7 +606,7 @@ public protocol HopNodeProtocol : AnyObject {
     func hpsApprove(path: String, requester: Data) throws  -> Data
     
     /**
-     * Decline a received invite — drops it from durable storage so it won't reappear on restart.
+     * Decline a received invite - drops it from durable storage so it won't reappear on restart.
      */
     func hpsDeclineInvite(host: Data, path: String) throws 
     
@@ -632,7 +632,7 @@ public protocol HopNodeProtocol : AnyObject {
     func hpsMembers(path: String)  -> [Data]
     
     /**
-     * Topics this node hosts or follows — the app calls this at startup to rebuild its channel
+     * Topics this node hosts or follows - the app calls this at startup to rebuild its channel
      * list, since the node persists topics but the app's in-memory list doesn't.
      */
     func hpsMyTopics()  -> [HpsMyTopic]
@@ -702,7 +702,7 @@ public protocol HopNodeProtocol : AnyObject {
     func name()  -> String
     
     /**
-     * Live links `(address, link id)` — the host maps link ids to transports to show
+     * Live links `(address, link id)` - the host maps link ids to transports to show
      * the route to each direct neighbour.
      */
     func peerLinks()  -> [PeerLink]
@@ -732,7 +732,7 @@ public protocol HopNodeProtocol : AnyObject {
     
     /**
      * Publish a signed service advert that gossips across the mesh (even multiple
-     * hops away). Returns the advert id. Apps build presence on this — e.g. publish
+     * hops away). Returns the advert id. Apps build presence on this - e.g. publish
      * a "presence" service whose `title` is the user's display name. `ttlMs` bounds
      * how long the record lives before it must be refreshed.
      */
@@ -792,7 +792,7 @@ public protocol HopNodeProtocol : AnyObject {
     func sendHttpResponse(to: Data, forRequestId: Data, status: UInt16, body: Data) throws 
     
     /**
-     * Send a peer message to `dst` (an address — sealing key is derived from it).
+     * Send a peer message to `dst` (an address - sealing key is derived from it).
      * **Untraceable by default** (DESIGN.md §39): no cleartext src/dst, the bundle floods
      * and is recognized only by `dst`. Still forward-secret + sender-authenticated. Returns
      * the bundle id. Set `request_ack` for a private delivery confirmation.
@@ -800,7 +800,7 @@ public protocol HopNodeProtocol : AnyObject {
     func sendMessage(dst: Data, contentType: String, body: Data, requestAck: Bool) throws  -> Data
     
     /**
-     * Send a peer message to `dst` with full §27 provenance — cleartext src/dst, route
+     * Send a peer message to `dst` with full §27 provenance - cleartext src/dst, route
      * learning, relay-vaccinating ACKs. The **opt-in traced** path; prefer [`Self::send_message`]
      * (untraceable) unless the user has explicitly chosen a traceable send.
      */
@@ -847,8 +847,8 @@ public protocol HopNodeProtocol : AnyObject {
     
     /**
      * Domains the node needs the host to resolve (DESIGN.md §30). For each, fetch the full
-     * DNSSEC chain over DoH — the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
-     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) — all with `do=1`,
+     * DNSSEC chain over DoH - the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
+     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) - all with `do=1`,
      * then hand the raw response bodies to `provide_dns_proof`. Core validates; the host never
      * decides the address.
      */
@@ -967,7 +967,7 @@ public convenience init() {
     
     /**
      * Open a node with **persistent** storage at `db_path` (messages survive
-     * restarts; bounded — older relayed messages are evicted to make room), a
+     * restarts; bounded - older relayed messages are evicted to make room), a
      * saved identity secret, and a 32-byte **app secret** that isolates this app's
      * `hps://` channels/services from other apps (DESIGN.md §32). Pass empty/short
      * app-secret bytes to stay on the open shared fabric. If the path can't be opened it is
@@ -1125,7 +1125,7 @@ open func hpsApprove(path: String, requester: Data)throws  -> Data {
 }
     
     /**
-     * Decline a received invite — drops it from durable storage so it won't reappear on restart.
+     * Decline a received invite - drops it from durable storage so it won't reappear on restart.
      */
 open func hpsDeclineInvite(host: Data, path: String)throws  {try rustCallWithError(FfiConverterTypeFfiError.lift) {
     uniffi_hop_fn_method_hopnode_hps_decline_invite(self.uniffiClonePointer(),
@@ -1182,7 +1182,7 @@ open func hpsMembers(path: String) -> [Data] {
 }
     
     /**
-     * Topics this node hosts or follows — the app calls this at startup to rebuild its channel
+     * Topics this node hosts or follows - the app calls this at startup to rebuild its channel
      * list, since the node persists topics but the app's in-memory list doesn't.
      */
 open func hpsMyTopics() -> [HpsMyTopic] {
@@ -1324,7 +1324,7 @@ open func name() -> String {
 }
     
     /**
-     * Live links `(address, link id)` — the host maps link ids to transports to show
+     * Live links `(address, link id)` - the host maps link ids to transports to show
      * the route to each direct neighbour.
      */
 open func peerLinks() -> [PeerLink] {
@@ -1380,7 +1380,7 @@ open func publishPrekey()throws  -> Data {
     
     /**
      * Publish a signed service advert that gossips across the mesh (even multiple
-     * hops away). Returns the advert id. Apps build presence on this — e.g. publish
+     * hops away). Returns the advert id. Apps build presence on this - e.g. publish
      * a "presence" service whose `title` is the user's display name. `ttlMs` bounds
      * how long the record lives before it must be refreshed.
      */
@@ -1512,7 +1512,7 @@ open func sendHttpResponse(to: Data, forRequestId: Data, status: UInt16, body: D
 }
     
     /**
-     * Send a peer message to `dst` (an address — sealing key is derived from it).
+     * Send a peer message to `dst` (an address - sealing key is derived from it).
      * **Untraceable by default** (DESIGN.md §39): no cleartext src/dst, the bundle floods
      * and is recognized only by `dst`. Still forward-secret + sender-authenticated. Returns
      * the bundle id. Set `request_ack` for a private delivery confirmation.
@@ -1529,7 +1529,7 @@ open func sendMessage(dst: Data, contentType: String, body: Data, requestAck: Bo
 }
     
     /**
-     * Send a peer message to `dst` with full §27 provenance — cleartext src/dst, route
+     * Send a peer message to `dst` with full §27 provenance - cleartext src/dst, route
      * learning, relay-vaccinating ACKs. The **opt-in traced** path; prefer [`Self::send_message`]
      * (untraceable) unless the user has explicitly chosen a traceable send.
      */
@@ -1627,8 +1627,8 @@ open func subscribe(topic: String) {try! rustCall() {
     
     /**
      * Domains the node needs the host to resolve (DESIGN.md §30). For each, fetch the full
-     * DNSSEC chain over DoH — the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
-     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) — all with `do=1`,
+     * DNSSEC chain over DoH - the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
+     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) - all with `do=1`,
      * then hand the raw response bodies to `provide_dns_proof`. Core validates; the host never
      * decides the address.
      */
@@ -2095,7 +2095,7 @@ public func FfiConverterTypeHpsMessage_lower(_ value: HpsMessage) -> RustBuffer 
 
 
 /**
- * A topic we host or follow — for rebuilding the app's channel list after a restart.
+ * A topic we host or follow - for rebuilding the app's channel list after a restart.
  */
 public struct HpsMyTopic {
     public var host: Data
@@ -2628,7 +2628,7 @@ public struct InboxMessage {
      */
     public var hops: UInt8
     /**
-     * Sender's clock (ms) when the message was created — signed by the sender.
+     * Sender's clock (ms) when the message was created - signed by the sender.
      * Subtract from local receive time for an end-to-end latency estimate.
      */
     public var createdAt: UInt64
@@ -2650,7 +2650,7 @@ public struct InboxMessage {
          * How many hops it travelled to reach us (A→B path length).
          */hops: UInt8, 
         /**
-         * Sender's clock (ms) when the message was created — signed by the sender.
+         * Sender's clock (ms) when the message was created - signed by the sender.
          * Subtract from local receive time for an end-to-end latency estimate.
          */createdAt: UInt64, 
         /**
@@ -2763,7 +2763,7 @@ public struct MessageStatus {
      */
     public var deliveryHops: UInt8
     /**
-     * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK —
+     * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK -
      * how long the message took to *reach* the recipient, NOT the round trip. 0 until delivered.
      */
     public var deliveryMs: UInt32
@@ -2781,7 +2781,7 @@ public struct MessageStatus {
          * Forward path length the destination observed (hops to delivery; 0 until delivered).
          */deliveryHops: UInt8, 
         /**
-         * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK —
+         * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK -
          * how long the message took to *reach* the recipient, NOT the round trip. 0 until delivered.
          */deliveryMs: UInt32) {
         self.relayed = relayed
@@ -3103,12 +3103,12 @@ public func FfiConverterTypeQueueItem_lower(_ value: QueueItem) -> RustBuffer {
 
 /**
  * A service advert discovered via gossip (direct or relayed). The `publisher` is
- * the address to message — its sealing key is derived from it. Apps build presence
+ * the address to message - its sealing key is derived from it. Apps build presence
  * and contacts on this (e.g. a "presence" service whose `title` is a display name).
  */
 public struct ServiceHit {
     /**
-     * Publisher's hop address (Ed25519 public key) — message this to reach them.
+     * Publisher's hop address (Ed25519 public key) - message this to reach them.
      */
     public var publisher: Data
     public var service: String
@@ -3120,7 +3120,7 @@ public struct ServiceHit {
      */
     public var hops: UInt8
     /**
-     * Publisher clock (ms) when this advert was created — lets the app pick the
+     * Publisher clock (ms) when this advert was created - lets the app pick the
      * freshest record per publisher (e.g. current foreground/background state).
      */
     public var createdAt: UInt64
@@ -3129,13 +3129,13 @@ public struct ServiceHit {
     // declare one manually.
     public init(
         /**
-         * Publisher's hop address (Ed25519 public key) — message this to reach them.
+         * Publisher's hop address (Ed25519 public key) - message this to reach them.
          */publisher: Data, service: String, title: String, summary: String, tags: [String], 
         /**
          * Hops away through the mesh (1 = direct neighbour, ≥2 = via relays; 0 = unknown).
          */hops: UInt8, 
         /**
-         * Publisher clock (ms) when this advert was created — lets the app pick the
+         * Publisher clock (ms) when this advert was created - lets the app pick the
          * freshest record per publisher (e.g. current foreground/background state).
          */createdAt: UInt64) {
         self.publisher = publisher
@@ -3238,7 +3238,7 @@ public func FfiConverterTypeServiceHit_lower(_ value: ServiceHit) -> RustBuffer 
 public struct ServiceReq {
     public var from: Data
     /**
-     * Request id — pass back to `send_service_response` as `for_request_id`.
+     * Request id - pass back to `send_service_response` as `for_request_id`.
      */
     public var requestId: Data
     public var service: String
@@ -3249,7 +3249,7 @@ public struct ServiceReq {
     // declare one manually.
     public init(from: Data, 
         /**
-         * Request id — pass back to `send_service_response` as `for_request_id`.
+         * Request id - pass back to `send_service_response` as `for_request_id`.
          */requestId: Data, service: String, method: String, args: Data) {
         self.from = from
         self.requestId = requestId
@@ -3581,7 +3581,7 @@ public enum HnsLookupResult {
      */
     case pending
     /**
-     * This device has no internet and no resolver was given — call `resolve_hns_via` with a
+     * This device has no internet and no resolver was given - call `resolve_hns_via` with a
      * known internet-connected peer (e.g. a relay address).
      */
     case needsResolver
@@ -4384,7 +4384,7 @@ public func decodeIdentity(body: Data) -> IdentityInfo? {
 })
 }
 /**
- * The built-in identity service name (`hop.identify`) — call it on a peer to learn its
+ * The built-in identity service name (`hop.identify`) - call it on a peer to learn its
  * display name + kind (DESIGN.md §29).
  */
 public func serviceIdentify() -> String {
@@ -4394,7 +4394,7 @@ public func serviceIdentify() -> String {
 })
 }
 /**
- * The 8-byte short form of a full address — matches what trace hops carry, so the app
+ * The 8-byte short form of a full address - matches what trace hops carry, so the app
  * can index its known addresses by this and resolve trace hops to display names (§27).
  */
 public func shortAddress(address: Data) -> Data {
