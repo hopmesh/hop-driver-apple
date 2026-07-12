@@ -16,7 +16,7 @@ let package = Package(
         .executable(name: "relaymac", targets: ["relaymac"]),
     ],
     // The transport layer is the four INDEPENDENT bearer packages (bearers/apple/*), each binding the
-    // pure-Swift HopContract (from sdk/wrappers/apple). BLE + LAN + cloud relay links now form ONLY through
+    // pure-Swift HopContract (from sdk/apple). BLE + LAN + cloud relay links now form ONLY through
     // those bearers via the BearerManager (there is no `Config.useSharedBearers` flag and no in-driver
     // HopLink/GattDataLink/LanLink fallback — those were deleted in the cutover). Multipeer (Wi-Fi P2P)
     // and the direct hops:// endpoints remain in-driver; the long-lived IOThread is retained purely as the
@@ -25,7 +25,7 @@ let package = Package(
     dependencies: [
         // The node API stays on UniFFI (HopFFI.xcframework). The bearers are now the INDEPENDENT
         // packages, binding HopContract (pure Swift, no libhop) — so no double-link of the Rust core.
-        .package(path: "../../../sdk/wrappers/apple"),
+        .package(path: "../../../sdk/apple"),
         .package(path: "../../../bearers/apple/HopBearerBle"),
         .package(path: "../../../bearers/apple/HopBearerLan"),
         .package(path: "../../../bearers/apple/HopBearerRelay"),
