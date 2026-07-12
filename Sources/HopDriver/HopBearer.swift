@@ -295,6 +295,13 @@ public final class HopBearer: NSObject, ObservableObject {
     // completion, and per-domain queues for requests issued before HNS resolves.
     var hopsWebReqs: [Data: (HopResponse) -> Void] = [:]   // internal: test seam
     var hopsWebPending: [String: [(path: String, completion: (HopResponse) -> Void)]] = [:]   // internal: test seam
+    /// Test seam (cov/apple-hns): when set, `openHops`/`hopsFetch` ask this closure for the domain's
+    /// `HnsLookupResult` instead of the real node. A fresh headless node with no peers and no internet
+    /// always settles `resolveHns` to `.pending` (hop-core queues a retry and defers - it can never itself
+    /// produce `.cached` or `.needsResolver` without a live peer or a completed DoH round trip), so a unit
+    /// test cannot reach those two branches through the real node. Defaults to nil, so production is
+    /// unchanged: always resolves through the real `node.resolveHns`.
+    var resolveHnsForTest: ((String) -> HnsLookupResult)?
     private var lastRelayLog = -1
     private var lastReachLog = -1
     private var tickTimer: Timer?

@@ -23,7 +23,9 @@ extension HopBearer {
         hopsResults[domain] = "resolving…"
         core.async { [weak self] in
             guard let self else { return }
-            let res = self.node.resolveHns(domain: domain)
+            // cov/apple-hns: `resolveHnsForTest`, when set by a test, substitutes the outcome below
+            // instead of asking the real node (see its declaration in HopBearer.swift for why).
+            let res = self.resolveHnsForTest?(domain) ?? self.node.resolveHns(domain: domain)
             DispatchQueue.main.async {
                 switch res {
                 case .cached(let address):
@@ -60,7 +62,8 @@ extension HopBearer {
         }
         core.async { [weak self] in
             guard let self else { return }
-            let res = self.node.resolveHns(domain: domain)
+            // cov/apple-hns: same test seam as openHops above.
+            let res = self.resolveHnsForTest?(domain) ?? self.node.resolveHns(domain: domain)
             DispatchQueue.main.async {
                 switch res {
                 case .cached(let address):
