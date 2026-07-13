@@ -2,9 +2,9 @@
 // while the package's AGGREGATE gate stayed green (the other pure-logic files pulled the average up),
 // so a regression here could hide behind it indefinitely. openHops/hopsFetch dispatch on the real node's
 // `resolveHns` result (.cached / .pending / .needsResolver, DESIGN.md §30); a fresh headless node with no
-// peers and no internet always settles `resolveHns` to `.pending` (hop-core queues a retry and defers -
-// it never itself produces `.cached` or `.needsResolver` without a live peer or a completed DoH round
-// trip), so the real node can never drive those two branches in a unit test. `resolveHnsForTest`
+// peers always settles `resolveHns` to `.pending` when online (hop-core queues a retry and defers - it
+// never itself produces `.cached` without a completed well-known fetch), so the real node can never drive
+// the cached/needs-resolver branches in a unit test. `resolveHnsForTest`
 // (declared on HopBearer in HopBearer.swift) is the minimal seam that lets a test substitute a synthetic
 // `HnsLookupResult` for exactly those branches; production leaves it nil and always asks the real node,
 // so behavior is unchanged. The domains below that flow into `fireHops`/`fireHopsWeb` (in
@@ -109,5 +109,20 @@ final class HeadlessHnsTests: XCTestCase {
         b.hopsWebPending["no url multi"] = [("/a", { _ in }), ("/b", { _ in })]
         b.applyHnsResults([HnsRecord(domain: "no url multi", address: endpoint)])
         XCTAssertEqual(b.nameByAddr[endpoint], "no url multi", "each queued web fetch dials the resolved endpoint")
+    }
+
+    // MARK: reachRecord(fromWellKnown:) - the pure /.well-known/hop body parser (§30)
+
+    func testReachRecordParsesBase64ReachField() {
+        let raw = Data([0, 1, 2, 3, 250, 251, 252, 253])
+        let body = Data("{\"address\":\"abc\",\"endpoint\":\"wss://x/_hop\",\"reach\":\"\(raw.base64EncodedString())\"}".utf8)
+        XCTAssertEqual(HopBearer.reachRecord(fromWellKnown: body), raw, "the base64 reach field decodes to the raw record bytes")
+    }
+
+    func testReachRecordEmptyOnMissingFieldOrGarbage() {
+        XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: nil).isEmpty, "nil body -> empty")
+        XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("not json".utf8)).isEmpty, "malformed JSON -> empty")
+        XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("{\"address\":\"abc\"}".utf8)).isEmpty, "no reach field -> empty")
+        XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("{\"reach\":\"!!! not base64 !!!\"}".utf8)).isEmpty, "bad base64 -> empty")
     }
 }

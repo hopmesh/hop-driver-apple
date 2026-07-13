@@ -6,7 +6,7 @@ import HopFFIBindings
 // and the drains for finished HNS resolutions / HTTP responses / host DNS lookups. Grouped out of the
 // HopBearer class body into this sibling extension so the concern is one cohesive file; behavior is
 // unchanged (methods moved verbatim). The genuinely network-bound senders (fireHops / fireHopsWeb /
-// fetchDnssecChain) stay in HopBearer+Radios.swift, excluded from the coverage denominator.
+// fetchReachRecord) stay in HopBearer+Radios.swift, excluded from the coverage denominator.
 extension HopBearer {
 
     // MARK: - HNS & hops:// (DESIGN.md §30)
@@ -30,7 +30,7 @@ extension HopBearer {
                 switch res {
                 case .cached(let address):
                     if address.isEmpty {
-                        // A cached negative - the domain has no `_hopaddress` record.
+                        // A cached negative - the domain has no reachable hops endpoint.
                         self.hopsResults[domain] = "error: no hops endpoint for \(domain)"
                     } else {
                         self.fireHops(domain: domain, path: path, endpoint: address)
@@ -100,9 +100,9 @@ extension HopBearer {
 
     /// Drain finished HNS resolutions (firing any queued hops:// fetch) and hops:// HTTP
     /// responses (matching them back to the in-flight request). The core caches records,
-    /// so we keep no extra cache here. Also service the host DNS hook: any `_hopaddress`
-    /// TXT lookups the node needs are resolved over DNS-over-HTTPS off the main queue and
-    /// fed back via `provideDnsAnswer` (DESIGN.md §30).
+    /// so we keep no extra cache here. Separately, any domains the node wants resolved are
+    /// fetched from their `/.well-known/hop` off the main queue and fed back via
+    /// `provideReachRecord` (see `applyDnsLookups`, DESIGN.md §30).
     func applyHnsResults(_ results: [HnsRecord]) {
         for rec in results {
             // The manual text-box fetch (one path per domain).
@@ -142,10 +142,22 @@ extension HopBearer {
         }
     }
 
-    /// Host DNS hook (DESIGN.md §30): for each domain the node wants resolved, fetch its full DNSSEC
-    /// chain over DoH and hand core the raw response bodies - core validates the chain to the root
-    /// anchors and decides the address; the app never does.
+    /// Host resolver hook (DESIGN.md §30): for each domain the node wants resolved, fetch its
+    /// `/.well-known/hop` reach record over HTTPS and hand core the raw record bytes - core verifies the
+    /// self-certifying signature and decides the address (the domain's TLS cert proved the domain).
     func applyDnsLookups(_ domains: [String]) {
-        for domain in domains { fetchDnssecChain(domain) }
+        for domain in domains { fetchReachRecord(domain) }
+    }
+
+    /// Pull the `reach` field out of a `/.well-known/hop` JSON body (`{address, endpoint, reach}`, where
+    /// `reach` is the base64-std reach record) and decode it to the raw record bytes. Returns empty on a
+    /// missing field / malformed JSON / bad base64. Pure (no network), so it's unit-testable apart from
+    /// the URLSession GET in `fetchReachRecord` (which is excluded from the coverage denominator).
+    static func reachRecord(fromWellKnown body: Data?) -> Data {
+        guard let body,
+              let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let reach = obj["reach"] as? String,
+              let bytes = Data(base64Encoded: reach) else { return Data() }
+        return bytes
     }
 }

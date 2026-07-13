@@ -297,9 +297,9 @@ public final class HopBearer: NSObject, ObservableObject {
     var hopsWebPending: [String: [(path: String, completion: (HopResponse) -> Void)]] = [:]   // internal: test seam
     /// Test seam (cov/apple-hns): when set, `openHops`/`hopsFetch` ask this closure for the domain's
     /// `HnsLookupResult` instead of the real node. A fresh headless node with no peers and no internet
-    /// always settles `resolveHns` to `.pending` (hop-core queues a retry and defers - it can never itself
-    /// produce `.cached` or `.needsResolver` without a live peer or a completed DoH round trip), so a unit
-    /// test cannot reach those two branches through the real node. Defaults to nil, so production is
+    /// always settles `resolveHns` to `.pending` when online (hop-core queues a retry and defers - it can
+    /// never itself produce `.cached` without a completed well-known fetch), so a unit test cannot reach the
+    /// cached/needs-resolver branches through the real node. Defaults to nil, so production is
     /// unchanged: always resolves through the real `node.resolveHns`.
     var resolveHnsForTest: ((String) -> HnsLookupResult)?
     private var lastRelayLog = -1
@@ -683,7 +683,7 @@ public final class HopBearer: NSObject, ObservableObject {
     // MARK: - HNS & hops:// (DESIGN.md §30)
     // The HNS + hops:// node-driving methods (openHops / hopsFetch / parseHops + the applyHnsResults /
     // applyHttpResponses / applyDnsLookups drains) live in HopBearer+Hns.swift. The network-bound senders
-    // (fireHops / fireHopsWeb / fetchDnssecChain) stay in HopBearer+Radios.swift.
+    // (fireHops / fireHopsWeb / fetchReachRecord) stay in HopBearer+Radios.swift.
 
     /// The chat for `peer` is on screen: clear its badge and stop counting it.
     public func openChat(_ peer: String) { activePeer = peer; unread[peer] = 0 }

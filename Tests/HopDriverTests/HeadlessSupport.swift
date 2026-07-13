@@ -5,7 +5,7 @@
 // call the internal snapshot-mapping helpers directly with constructed FFI records. No radio, no UIKit:
 // every bearer is built `.centralOnly`/`.relayOnly` (isFull=false) and `start()` is only ever called in
 // the relay-only + no-relay configuration that registers zero bearers, so no CoreBluetooth / Multipeer /
-// WebSocket / DoH I/O is ever touched. The genuinely device/radio-bound surface lives in
+// WebSocket / well-known I/O is ever touched. The genuinely device/radio-bound surface lives in
 // HopBearer+Radios.swift (and HopLink.swift) and is excluded from the coverage denominator.
 
 import XCTest

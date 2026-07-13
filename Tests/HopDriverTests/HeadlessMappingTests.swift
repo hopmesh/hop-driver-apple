@@ -135,7 +135,7 @@ final class HeadlessMappingTests: XCTestCase {
 
     func testApplyDnsLookupsEmptyIsInert() {
         let b = makeHeadlessBearer()
-        b.applyDnsLookups([])   // no domains ⇒ no DoH network I/O
+        b.applyDnsLookups([])   // no domains ⇒ no well-known network I/O
     }
 
     // MARK: applyHpsMessages / applyHpsInvites

@@ -1,10 +1,10 @@
 // HopBearer - the device/radio/network I/O surface, split out of HopBearer.swift (cov/apple-driver).
 //
 // EVERYTHING here drives a real radio or a live network socket and therefore cannot run under a headless
-// macOS `swift test` (no BLE/Wi-Fi peer, no reachable hops:// endpoint, no DoH round-trip, no UIKit app
+// macOS `swift test` (no BLE/Wi-Fi peer, no reachable hops:// endpoint, no well-known fetch, no UIKit app
 // state): the Wi-Fi (MultipeerConnectivity) bearer + its session/advertiser/browser delegates, the shared-
 // BearerManager link callbacks, the direct hops:// endpoint WebSocket dialer + its URLSession delegate, the
-// hops:// request senders, the DNSSEC-over-DoH fetch, and the local user-notification post. It is exercised
+// hops:// request senders, the well-known reach-record fetch, and the local user-notification post. It is exercised
 // by the on-device / cross-platform workflow (testkit + the hopmac/relaymac headless clients + real
 // devices), NOT by unit tests. It is deliberately isolated in its own file so the coverage gate can exclude
 // it from HopBearer's denominator via `-ignore-filename-regex` (the pure node-driving + snapshot-mapping +
@@ -185,41 +185,32 @@ extension HopBearer {
         }
     }
 
-    // MARK: - DNSSEC-over-DoH host resolver hook (§30)
+    // MARK: - well-known reach-record host resolver hook (§30)
 
-    /// Fetch a domain's full DNSSEC chain over DNS-over-HTTPS and feed the raw JSON bodies to
-    /// core via `provideDnsProof`: the `_hopaddress.<domain>` TXT plus DNSKEY + DS for every
-    /// zone up to the root, all with `do=1`. Runs the GETs concurrently, then marshals back to
-    /// the main queue (where the node is driven) once they're all in.
-    func fetchDnssecChain(_ domain: String) {
-        // The DoH queries: TXT for the record, then DNSKEY+DS for each zone up to root.
-        var queries: [(String, Int)] = [("_hopaddress.\(domain)", 16)]
-        var zone = domain
-        while true {
-            queries.append((zone, 48)) // DNSKEY
-            if zone == "." { break }
-            queries.append((zone, 43)) // DS
-            zone = zone.contains(".") ? String(zone[zone.index(after: zone.firstIndex(of: ".")!)...]) : "."
+    /// Fetch a domain's `/.well-known/hop` reach record over HTTPS and feed the raw record bytes to
+    /// core via `provideReachRecord`. One GET per resolve: the domain's own TLS cert proves the domain,
+    /// and the self-certifying reach record served there binds it to a Hop address (core verifies the
+    /// signature). Marshals back to the main-driven core queue once the response is in. Any failure
+    /// (bad URL, network, non-2xx, malformed body) hands core an empty record, which it negative-caches.
+    /// The record parse is the pure `Self.reachRecord(fromWellKnown:)`, unit-tested in HopBearer+Hns.swift.
+    func fetchReachRecord(_ domain: String) {
+        guard let url = URL(string: "https://\(domain)/.well-known/hop") else {
+            core.async { [weak self] in
+                guard let self else { return }
+                self.node.provideReachRecord(domain: domain, record: Data())
+                self.pump()
+            }
+            return
         }
-
-        let group = DispatchGroup()
-        var bodies: [String] = []
-        let lock = NSLock()
-        for (name, qtype) in queries {
-            guard let url = URL(string: "https://dns.google/resolve?name=\(name)&type=\(qtype)&do=1") else { continue }
-            group.enter()
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                if let data, let body = String(data: data, encoding: .utf8) {
-                    lock.lock(); bodies.append(body); lock.unlock()
-                }
-                group.leave()
-            }.resume()
-        }
-        group.notify(queue: core) { [weak self] in   // node access on core
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, _ in
             guard let self else { return }
-            self.node.provideDnsProof(domain: domain, bodies: bodies)
-            self.pump()
-        }
+            let ok = (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            let record = ok ? Self.reachRecord(fromWellKnown: data) : Data()
+            self.core.async {                            // node access on core
+                self.node.provideReachRecord(domain: domain, record: record)
+                self.pump()
+            }
+        }.resume()
     }
 
     // MARK: - Local user notification (UIKit app state)

@@ -39,6 +39,52 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -281,7 +327,7 @@ private func makeRustCall<T, E: Swift.Error>(
     _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T,
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws -> T {
-    uniffiEnsureInitialized()
+    uniffiEnsureHopInitialized()
     var callStatus = RustCallStatus.init()
     let returnedVal = callback(&callStatus)
     try uniffiCheckCallStatus(callStatus: callStatus, errorHandler: errorHandler)
@@ -352,18 +398,29 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-fileprivate class UniffiHandleMap<T> {
-    private var map: [UInt64: T] = [:]
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
+
+fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
+    // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
-    private var currentHandle: UInt64 = 1
+    private var map: [UInt64: T] = [:]
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
+    }
+
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
     }
 
      func get(handle: UInt64) throws -> T {
@@ -372,6 +429,15 @@ fileprivate class UniffiHandleMap<T> {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -499,7 +565,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -515,7 +585,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -550,7 +621,7 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * A running Hop node the host drives. Thread-safe (interior `Mutex`), handed to
  * the foreign side as a reference-counted object.
  */
-public protocol HopNodeProtocol : AnyObject {
+public protocol HopNodeProtocol: AnyObject, Sendable {
     
     /**
      * This node's hop address (Ed25519 public key).
@@ -606,7 +677,7 @@ public protocol HopNodeProtocol : AnyObject {
     func hpsApprove(path: String, requester: Data) throws  -> Data
     
     /**
-     * Decline a received invite - drops it from durable storage so it won't reappear on restart.
+     * Decline a received invite — drops it from durable storage so it won't reappear on restart.
      */
     func hpsDeclineInvite(host: Data, path: String) throws 
     
@@ -632,7 +703,7 @@ public protocol HopNodeProtocol : AnyObject {
     func hpsMembers(path: String)  -> [Data]
     
     /**
-     * Topics this node hosts or follows - the app calls this at startup to rebuild its channel
+     * Topics this node hosts or follows — the app calls this at startup to rebuild its channel
      * list, since the node persists topics but the app's in-memory list doesn't.
      */
     func hpsMyTopics()  -> [HpsMyTopic]
@@ -702,7 +773,7 @@ public protocol HopNodeProtocol : AnyObject {
     func name()  -> String
     
     /**
-     * Live links `(address, link id)` - the host maps link ids to transports to show
+     * Live links `(address, link id)` — the host maps link ids to transports to show
      * the route to each direct neighbour.
      */
     func peerLinks()  -> [PeerLink]
@@ -718,10 +789,10 @@ public protocol HopNodeProtocol : AnyObject {
     func pendingCount()  -> UInt32
     
     /**
-     * Feed back the raw DoH response bodies for a domain's chain. Core validates the DNSSEC
-     * chain to the root anchors and caches the address only if it verifies (DESIGN.md §30).
+     * Feed back the reach-record bytes fetched from a domain's `/.well-known/hop`. Core verifies
+     * the self-certifying record and caches the address only if it verifies (DESIGN.md §30).
      */
-    func provideDnsProof(domain: String, bodies: [String]) 
+    func provideReachRecord(domain: String, record: Data) 
     
     /**
      * Publish this node's prekey so peers can open forward-secret sessions to it
@@ -732,7 +803,7 @@ public protocol HopNodeProtocol : AnyObject {
     
     /**
      * Publish a signed service advert that gossips across the mesh (even multiple
-     * hops away). Returns the advert id. Apps build presence on this - e.g. publish
+     * hops away). Returns the advert id. Apps build presence on this — e.g. publish
      * a "presence" service whose `title` is the user's display name. `ttlMs` bounds
      * how long the record lives before it must be refreshed.
      */
@@ -768,12 +839,6 @@ public protocol HopNodeProtocol : AnyObject {
     func resolveHns(domain: String)  -> HnsLookupResult
     
     /**
-     * Resolve `domain` by asking a known internet-connected peer (e.g. a relay) over the
-     * mesh. The answer arrives via `take_hns_results`. Returns the query bundle id.
-     */
-    func resolveHnsVia(resolver: Data, domain: String) throws  -> Data
-    
-    /**
      * Export this node's identity secret to persist (store it in the Keychain).
      */
     func secret()  -> Data
@@ -792,7 +857,7 @@ public protocol HopNodeProtocol : AnyObject {
     func sendHttpResponse(to: Data, forRequestId: Data, status: UInt16, body: Data) throws 
     
     /**
-     * Send a peer message to `dst` (an address - sealing key is derived from it).
+     * Send a peer message to `dst` (an address — sealing key is derived from it).
      * **Untraceable by default** (DESIGN.md §39): no cleartext src/dst, the bundle floods
      * and is recognized only by `dst`. Still forward-secret + sender-authenticated. Returns
      * the bundle id. Set `request_ack` for a private delivery confirmation.
@@ -800,7 +865,7 @@ public protocol HopNodeProtocol : AnyObject {
     func sendMessage(dst: Data, contentType: String, body: Data, requestAck: Bool) throws  -> Data
     
     /**
-     * Send a peer message to `dst` with full §27 provenance - cleartext src/dst, route
+     * Send a peer message to `dst` with full §27 provenance — cleartext src/dst, route
      * learning, relay-vaccinating ACKs. The **opt-in traced** path; prefer [`Self::send_message`]
      * (untraceable) unless the user has explicitly chosen a traceable send.
      */
@@ -841,16 +906,23 @@ public protocol HopNodeProtocol : AnyObject {
     func setName(name: String) 
     
     /**
+     * Sign a self-certifying reachability record for this node's address, binding it to `endpoint`
+     * (e.g. `wss://myaddress.com/_hop`) for `ttl_secs`. Serve the bytes at `/.well-known/hop` or
+     * gossip them; verify with the free `verify_reach_record`. No DNS/DNSSEC needed: the record is
+     * signed by the address it names (DESIGN.md §30 endpoint discovery).
+     */
+    func signReachRecord(endpoint: String, ttlSecs: UInt32)  -> Data
+    
+    /**
      * Subscribe the directory to a service topic.
      */
     func subscribe(topic: String) 
     
     /**
-     * Domains the node needs the host to resolve (DESIGN.md §30). For each, fetch the full
-     * DNSSEC chain over DoH - the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
-     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) - all with `do=1`,
-     * then hand the raw response bodies to `provide_dns_proof`. Core validates; the host never
-     * decides the address.
+     * Domains the node needs the host to resolve (DESIGN.md §30). For each, do a plain HTTPS GET
+     * of `https://<domain>/.well-known/hop` (the TLS certificate proves the domain), pull the
+     * reach record out of that JSON body, and hand its bytes to `provide_reach_record`. Core
+     * verifies the reach record against the address it carries; the host never decides the address.
      */
     func takeDnsLookups()  -> [String]
     
@@ -902,84 +974,88 @@ public protocol HopNodeProtocol : AnyObject {
     func tick(nowMs: UInt64) 
     
 }
-
 /**
  * A running Hop node the host drives. Thread-safe (interior `Mutex`), handed to
  * the foreign side as a reference-counted object.
  */
-open class HopNode:
-    HopNodeProtocol {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+open class HopNode: HopNodeProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
     // we can't implement `FfiConverter` without making this `required` and we can't
     // make it `required` without making it `public`.
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_hop_fn_clone_hopnode(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_hop_fn_clone_hopnode(self.handle, $0) }
     }
     /**
      * Create a node with a fresh identity and ephemeral in-memory storage.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
-    uniffi_hop_fn_constructor_hopnode_new($0
+        uniffiCallStatus in
+    uniffi_hop_fn_constructor_hopnode_new(uniffiCallStatus
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_hop_fn_free_hopnode(pointer, $0) }
+        try! rustCall { uniffi_hop_fn_free_hopnode(handle, $0) }
     }
 
     
     /**
      * Open a node with **persistent** storage at `db_path` (messages survive
-     * restarts; bounded - older relayed messages are evicted to make room), a
+     * restarts; bounded — older relayed messages are evicted to make room), a
      * saved identity secret, and a 32-byte **app secret** that isolates this app's
      * `hps://` channels/services from other apps (DESIGN.md §32). Pass empty/short
      * app-secret bytes to stay on the open shared fabric. If the path can't be opened it is
      * quarantined and reopened fresh; only if that also fails does it run ephemeral, and then
      * [`HopNode::is_persistent`] returns false so the host can tell (F-26).
      */
-public static func `open`(dbPath: String, secret: Data, appSecret: Data) -> HopNode {
-    return try!  FfiConverterTypeHopNode.lift(try! rustCall() {
+public static func `open`(dbPath: String, secret: Data, appSecret: Data) -> HopNode  {
+    return try!  FfiConverterTypeHopNode_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_constructor_hopnode_open(
         FfiConverterString.lower(dbPath),
         FfiConverterData.lower(secret),
-        FfiConverterData.lower(appSecret),$0
+        FfiConverterData.lower(appSecret),uniffiCallStatus
     )
 })
 }
@@ -989,14 +1065,19 @@ public static func `open`(dbPath: String, secret: Data, appSecret: Data) -> HopN
      * and stores in the platform Keychain/Keystore (F-25). Real encryption requires the store's
      * `sqlcipher` cargo feature; without it the key is accepted but the db stays plain. An empty key
      * behaves exactly like `open`.
+     *
+     * core-ffi-03: on the `minimal` embedded build there is no SQLite, so `db_path`/`key` are accepted
+     * for ABI compatibility but the node runs EPHEMERAL (in-memory); `is_persistent()` reports false so
+     * the host knows. An ESP32 host that wants durability supplies its own store via a future seam.
      */
-public static func openKeyed(dbPath: String, secret: Data, appSecret: Data, key: Data) -> HopNode {
-    return try!  FfiConverterTypeHopNode.lift(try! rustCall() {
+public static func openKeyed(dbPath: String, secret: Data, appSecret: Data, key: Data) -> HopNode  {
+    return try!  FfiConverterTypeHopNode_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_constructor_hopnode_open_keyed(
         FfiConverterString.lower(dbPath),
         FfiConverterData.lower(secret),
         FfiConverterData.lower(appSecret),
-        FfiConverterData.lower(key),$0
+        FfiConverterData.lower(key),uniffiCallStatus
     )
 })
 }
@@ -1005,10 +1086,11 @@ public static func openKeyed(dbPath: String, secret: Data, appSecret: Data, key:
      * Restore a node from a saved identity secret with ephemeral storage. Pass
      * empty/invalid bytes to get a fresh identity.
      */
-public static func withSecret(secret: Data) -> HopNode {
-    return try!  FfiConverterTypeHopNode.lift(try! rustCall() {
+public static func withSecret(secret: Data) -> HopNode  {
+    return try!  FfiConverterTypeHopNode_lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_constructor_hopnode_with_secret(
-        FfiConverterData.lower(secret),$0
+        FfiConverterData.lower(secret),uniffiCallStatus
     )
 })
 }
@@ -1018,9 +1100,11 @@ public static func withSecret(secret: Data) -> HopNode {
     /**
      * This node's hop address (Ed25519 public key).
      */
-open func address() -> Data {
+open func address() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_address(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_address(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1029,11 +1113,13 @@ open func address() -> Data {
      * Browse a service namespace (optionally filtered by tag) for adverts discovered
      * across the mesh, with hop distance. Pass an empty `tag` for no filter.
      */
-open func browse(service: String, tag: String) -> [ServiceHit] {
+open func browse(service: String, tag: String) -> [ServiceHit]  {
     return try!  FfiConverterSequenceTypeServiceHit.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_browse(self.uniffiClonePointer(),
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_browse(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(service),
-        FfiConverterString.lower(tag),$0
+        FfiConverterString.lower(tag),uniffiCallStatus
     )
 })
 }
@@ -1041,9 +1127,11 @@ open func browse(service: String, tag: String) -> [ServiceHit] {
     /**
      * Same-app discoverable topics visible on the mesh (decrypted descriptors + host address).
      */
-open func browseDiscoverable() -> [HpsTopicInfo] {
+open func browseDiscoverable() -> [HpsTopicInfo]  {
     return try!  FfiConverterSequenceTypeHpsTopicInfo.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_browse_discoverable(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_browse_discoverable(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1052,8 +1140,10 @@ open func browseDiscoverable() -> [HpsTopicInfo] {
      * Clear the relay queue: drop our undelivered messages (stop retransmitting) and any
      * bundles held for peers. Does not touch chat history or sessions.
      */
-open func clearQueue() {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_clear_queue(self.uniffiClonePointer(),$0
+open func clearQueue()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_clear_queue(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -1061,10 +1151,12 @@ open func clearQueue() {try! rustCall() {
     /**
      * A bearer connection came up; `initiator` = we dialed it (BLE central).
      */
-open func connected(link: UInt64, initiator: Bool) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_connected(self.uniffiClonePointer(),
+open func connected(link: UInt64, initiator: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_connected(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(link),
-        FfiConverterBool.lower(initiator),$0
+        FfiConverterBool.lower(initiator),uniffiCallStatus
     )
 }
 }
@@ -1072,9 +1164,11 @@ open func connected(link: UInt64, initiator: Bool) {try! rustCall() {
     /**
      * A bearer connection dropped.
      */
-open func disconnected(link: UInt64) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_disconnected(self.uniffiClonePointer(),
-        FfiConverterUInt64.lower(link),$0
+open func disconnected(link: UInt64)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_disconnected(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(link),uniffiCallStatus
     )
 }
 }
@@ -1082,9 +1176,11 @@ open func disconnected(link: UInt64) {try! rustCall() {
     /**
      * Bytes the host must send over the bearer (then clears them).
      */
-open func drainOutgoing() -> [OutPacket] {
+open func drainOutgoing() -> [OutPacket]  {
     return try!  FfiConverterSequenceTypeOutPacket.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_drain_outgoing(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_drain_outgoing(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1093,9 +1189,11 @@ open func drainOutgoing() -> [OutPacket] {
      * A snapshot of the live HNS cache (for the debug view): each cached domain, its address
      * (empty = negative), and the remaining TTL in seconds (ticks down to expiry).
      */
-open func hnsCache() -> [HnsCacheEntry] {
+open func hnsCache() -> [HnsCacheEntry]  {
     return try!  FfiConverterSequenceTypeHnsCacheEntry.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_hns_cache(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hns_cache(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1103,11 +1201,13 @@ open func hnsCache() -> [HnsCacheEntry] {
     /**
      * Member → host: accept an invite we received; the host then seals us the keys.
      */
-open func hpsAcceptInvite(host: Data, path: String)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_accept_invite(self.uniffiClonePointer(),
+open func hpsAcceptInvite(host: Data, path: String)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_accept_invite(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(host),
-        FfiConverterString.lower(path),$0
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
@@ -1115,22 +1215,26 @@ open func hpsAcceptInvite(host: Data, path: String)throws  -> Data {
     /**
      * Host: approve a pending requester, sealing them the keys. Returns the keys bundle id.
      */
-open func hpsApprove(path: String, requester: Data)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_approve(self.uniffiClonePointer(),
+open func hpsApprove(path: String, requester: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_approve(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
-        FfiConverterData.lower(requester),$0
+        FfiConverterData.lower(requester),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Decline a received invite - drops it from durable storage so it won't reappear on restart.
+     * Decline a received invite — drops it from durable storage so it won't reappear on restart.
      */
-open func hpsDeclineInvite(host: Data, path: String)throws  {try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_decline_invite(self.uniffiClonePointer(),
+open func hpsDeclineInvite(host: Data, path: String)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_decline_invite(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(host),
-        FfiConverterString.lower(path),$0
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 }
 }
@@ -1138,10 +1242,12 @@ open func hpsDeclineInvite(host: Data, path: String)throws  {try rustCallWithErr
     /**
      * Host: deny/drop a pending requester (no keys).
      */
-open func hpsDeny(path: String, requester: Data)throws  {try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_deny(self.uniffiClonePointer(),
+open func hpsDeny(path: String, requester: Data)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_deny(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
-        FfiConverterData.lower(requester),$0
+        FfiConverterData.lower(requester),uniffiCallStatus
     )
 }
 }
@@ -1150,11 +1256,13 @@ open func hpsDeny(path: String, requester: Data)throws  {try rustCallWithError(F
      * Host → destination: invite an address to a topic we host (Invite mode). Returns the
      * invite bundle id.
      */
-open func hpsInvite(path: String, dest: Data)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_invite(self.uniffiClonePointer(),
+open func hpsInvite(path: String, dest: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_invite(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
-        FfiConverterData.lower(dest),$0
+        FfiConverterData.lower(dest),uniffiCallStatus
     )
 })
 }
@@ -1162,10 +1270,12 @@ open func hpsInvite(path: String, dest: Data)throws  -> Data {
     /**
      * Member → host: leave a topic (stop being re-keyed). Returns the leave bundle id, if any.
      */
-open func hpsLeave(path: String)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_leave(self.uniffiClonePointer(),
-        FfiConverterString.lower(path),$0
+open func hpsLeave(path: String)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_leave(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
@@ -1173,21 +1283,25 @@ open func hpsLeave(path: String)throws  -> Data {
     /**
      * Host: the retained-member set (addresses) for a topic.
      */
-open func hpsMembers(path: String) -> [Data] {
+open func hpsMembers(path: String) -> [Data]  {
     return try!  FfiConverterSequenceData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_hps_members(self.uniffiClonePointer(),
-        FfiConverterString.lower(path),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_members(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Topics this node hosts or follows - the app calls this at startup to rebuild its channel
+     * Topics this node hosts or follows — the app calls this at startup to rebuild its channel
      * list, since the node persists topics but the app's in-memory list doesn't.
      */
-open func hpsMyTopics() -> [HpsMyTopic] {
+open func hpsMyTopics() -> [HpsMyTopic]  {
     return try!  FfiConverterSequenceTypeHpsMyTopic.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_hps_my_topics(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_my_topics(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1195,10 +1309,12 @@ open func hpsMyTopics() -> [HpsMyTopic] {
     /**
      * Host: pending join requests for a RequestToJoin topic (each is a requester address).
      */
-open func hpsPending(path: String) -> [Data] {
+open func hpsPending(path: String) -> [Data]  {
     return try!  FfiConverterSequenceData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_hps_pending(self.uniffiClonePointer(),
-        FfiConverterString.lower(path),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_pending(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
@@ -1207,11 +1323,13 @@ open func hpsPending(path: String) -> [Data] {
      * Publish to a topic we host or (for a channel) belong to. Floods to all subscribers,
      * signed by the service key (service) or our own identity (channel). Returns the bundle id.
      */
-open func hpsPublish(path: String, body: Data)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_publish(self.uniffiClonePointer(),
+open func hpsPublish(path: String, body: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_publish(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
-        FfiConverterData.lower(body),$0
+        FfiConverterData.lower(body),uniffiCallStatus
     )
 })
 }
@@ -1219,10 +1337,12 @@ open func hpsPublish(path: String, body: Data)throws  -> Data {
     /**
      * Host: unique acking addresses for a topic (its reach / delivery sense, DESIGN.md §32).
      */
-open func hpsReach(path: String) -> UInt32 {
+open func hpsReach(path: String) -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_hps_reach(self.uniffiClonePointer(),
-        FfiConverterString.lower(path),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_reach(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
@@ -1232,12 +1352,14 @@ open func hpsReach(path: String) -> UInt32 {
      * removed members keep the dead key. `new_path` empty = keep the same path. Returns the
      * rekey bundle ids.
      */
-open func hpsRekey(path: String, newPath: String, remove: [Data])throws  -> [Data] {
-    return try  FfiConverterSequenceData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_rekey(self.uniffiClonePointer(),
+open func hpsRekey(path: String, newPath: String, remove: [Data])throws  -> [Data]  {
+    return try  FfiConverterSequenceData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_rekey(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
         FfiConverterString.lower(newPath),
-        FfiConverterSequenceData.lower(remove),$0
+        FfiConverterSequenceData.lower(remove),uniffiCallStatus
     )
 })
 }
@@ -1247,11 +1369,13 @@ open func hpsRekey(path: String, newPath: String, remove: [Data])throws  -> [Dat
      * topic) replies with the topic keys. Messages then arrive via `take_hps_messages`. Returns
      * the subscribe request's bundle id.
      */
-open func hpsSubscribe(host: Data, path: String)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_hps_subscribe(self.uniffiClonePointer(),
+open func hpsSubscribe(host: Data, path: String)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_hps_subscribe(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(host),
-        FfiConverterString.lower(path),$0
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
@@ -1259,9 +1383,11 @@ open func hpsSubscribe(host: Data, path: String)throws  -> Data {
     /**
      * Whether this device is marked internet-connected.
      */
-open func isInternet() -> Bool {
+open func isInternet() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_is_internet(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_is_internet(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1271,9 +1397,11 @@ open func isInternet() -> Bool {
      * will NOT survive a restart; the host should surface a warning rather than assume the
      * database is the ground truth (F-26).
      */
-open func isPersistent() -> Bool {
+open func isPersistent() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_is_persistent(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_is_persistent(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1282,10 +1410,12 @@ open func isPersistent() -> Bool {
      * Whether messaging `address` is forward-secret (a ratchet session exists)
      * rather than static-sealed (DESIGN.md §25). Drives a lock indicator in the UI.
      */
-open func isSecured(address: Data) -> Bool {
+open func isSecured(address: Data) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_is_secured(self.uniffiClonePointer(),
-        FfiConverterData.lower(address),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_is_secured(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(address),uniffiCallStatus
     )
 })
 }
@@ -1294,10 +1424,12 @@ open func isSecured(address: Data) -> Bool {
      * Whether this node has learned a live route toward `address` from observed
      * deliveries (DESIGN.md §27). Drives a "known route" indicator in the UI.
      */
-open func knowsRoute(address: Data) -> Bool {
+open func knowsRoute(address: Data) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_knows_route(self.uniffiClonePointer(),
-        FfiConverterData.lower(address),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_knows_route(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(address),uniffiCallStatus
     )
 })
 }
@@ -1305,10 +1437,12 @@ open func knowsRoute(address: Data) -> Bool {
     /**
      * Delivery status of a message we sent, by its bundle id.
      */
-open func messageStatus(id: Data) -> MessageStatus {
-    return try!  FfiConverterTypeMessageStatus.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_message_status(self.uniffiClonePointer(),
-        FfiConverterData.lower(id),$0
+open func messageStatus(id: Data) -> MessageStatus  {
+    return try!  FfiConverterTypeMessageStatus_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_message_status(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(id),uniffiCallStatus
     )
 })
 }
@@ -1316,20 +1450,24 @@ open func messageStatus(id: Data) -> MessageStatus {
     /**
      * This node's display name (empty string if unset).
      */
-open func name() -> String {
+open func name() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_name(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_name(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Live links `(address, link id)` - the host maps link ids to transports to show
+     * Live links `(address, link id)` — the host maps link ids to transports to show
      * the route to each direct neighbour.
      */
-open func peerLinks() -> [PeerLink] {
+open func peerLinks() -> [PeerLink]  {
     return try!  FfiConverterSequenceTypePeerLink.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_peer_links(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_peer_links(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1337,9 +1475,11 @@ open func peerLinks() -> [PeerLink] {
     /**
      * Addresses of currently-connected, authenticated peers.
      */
-open func peers() -> [Data] {
+open func peers() -> [Data]  {
     return try!  FfiConverterSequenceData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_peers(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_peers(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1347,21 +1487,25 @@ open func peers() -> [Data] {
     /**
      * Number of locally-sent bundles still awaiting an ACK.
      */
-open func pendingCount() -> UInt32 {
+open func pendingCount() -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_pending_count(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_pending_count(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Feed back the raw DoH response bodies for a domain's chain. Core validates the DNSSEC
-     * chain to the root anchors and caches the address only if it verifies (DESIGN.md §30).
+     * Feed back the reach-record bytes fetched from a domain's `/.well-known/hop`. Core verifies
+     * the self-certifying record and caches the address only if it verifies (DESIGN.md §30).
      */
-open func provideDnsProof(domain: String, bodies: [String]) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_provide_dns_proof(self.uniffiClonePointer(),
+open func provideReachRecord(domain: String, record: Data)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_provide_reach_record(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(domain),
-        FfiConverterSequenceString.lower(bodies),$0
+        FfiConverterData.lower(record),uniffiCallStatus
     )
 }
 }
@@ -1371,27 +1515,31 @@ open func provideDnsProof(domain: String, bodies: [String]) {try! rustCall() {
      * (DESIGN.md §25). Call at startup and re-publish periodically. Returns the
      * advert id.
      */
-open func publishPrekey()throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_publish_prekey(self.uniffiClonePointer(),$0
+open func publishPrekey()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_publish_prekey(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
     
     /**
      * Publish a signed service advert that gossips across the mesh (even multiple
-     * hops away). Returns the advert id. Apps build presence on this - e.g. publish
+     * hops away). Returns the advert id. Apps build presence on this — e.g. publish
      * a "presence" service whose `title` is the user's display name. `ttlMs` bounds
      * how long the record lives before it must be refreshed.
      */
-open func publishService(service: String, title: String, summary: String, tags: [String], ttlMs: UInt32)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_publish_service(self.uniffiClonePointer(),
+open func publishService(service: String, title: String, summary: String, tags: [String], ttlMs: UInt32)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_publish_service(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(service),
         FfiConverterString.lower(title),
         FfiConverterString.lower(summary),
         FfiConverterSequenceString.lower(tags),
-        FfiConverterUInt32.lower(ttlMs),$0
+        FfiConverterUInt32.lower(ttlMs),uniffiCallStatus
     )
 })
 }
@@ -1399,9 +1547,11 @@ open func publishService(service: String, title: String, summary: String, tags: 
     /**
      * The relay queue: our messages awaiting send (pinned) + peers' awaiting relay.
      */
-open func queue() -> [QueueItem] {
+open func queue() -> [QueueItem]  {
     return try!  FfiConverterSequenceTypeQueueItem.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_queue(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_queue(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1409,10 +1559,12 @@ open func queue() -> [QueueItem] {
     /**
      * Bytes arrived on a connection.
      */
-open func received(link: UInt64, bytes: Data) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_received(self.uniffiClonePointer(),
+open func received(link: UInt64, bytes: Data)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_received(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(link),
-        FfiConverterData.lower(bytes),$0
+        FfiConverterData.lower(bytes),uniffiCallStatus
     )
 }
 }
@@ -1422,13 +1574,15 @@ open func received(link: UInt64, bytes: Data) {try! rustCall() {
      * governs key handoff and `visibility` whether it's advertised for discovery (DESIGN.md
      * §32). Returns the service's public key for a `Service`, or empty for a `Channel`.
      */
-open func registerService(path: String, kind: HpsKind, access: HpsAccess, visibility: HpsVisibility) -> Data {
+open func registerService(path: String, kind: HpsKind, access: HpsAccess, visibility: HpsVisibility) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_register_service(self.uniffiClonePointer(),
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_register_service(
+            self.uniffiCloneHandle(),
         FfiConverterString.lower(path),
-        FfiConverterTypeHpsKind.lower(kind),
-        FfiConverterTypeHpsAccess.lower(access),
-        FfiConverterTypeHpsVisibility.lower(visibility),$0
+        FfiConverterTypeHpsKind_lower(kind),
+        FfiConverterTypeHpsAccess_lower(access),
+        FfiConverterTypeHpsVisibility_lower(visibility),uniffiCallStatus
     )
 })
 }
@@ -1438,9 +1592,11 @@ open func registerService(path: String, kind: HpsKind, access: HpsAccess, visibi
      * changed a struct's on-disk layout and dropped that state; the host should tell the user
      * (e.g. queued sends or sessions were lost) instead of it vanishing silently.
      */
-open func rehydrateDropped() -> UInt32 {
+open func rehydrateDropped() -> UInt32  {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_rehydrate_dropped(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_rehydrate_dropped(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1448,23 +1604,12 @@ open func rehydrateDropped() -> UInt32 {
     /**
      * Resolve `domain` to its hops endpoint address (DESIGN.md §30). See [`HnsLookupResult`].
      */
-open func resolveHns(domain: String) -> HnsLookupResult {
-    return try!  FfiConverterTypeHnsLookupResult.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_resolve_hns(self.uniffiClonePointer(),
-        FfiConverterString.lower(domain),$0
-    )
-})
-}
-    
-    /**
-     * Resolve `domain` by asking a known internet-connected peer (e.g. a relay) over the
-     * mesh. The answer arrives via `take_hns_results`. Returns the query bundle id.
-     */
-open func resolveHnsVia(resolver: Data, domain: String)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_resolve_hns_via(self.uniffiClonePointer(),
-        FfiConverterData.lower(resolver),
-        FfiConverterString.lower(domain),$0
+open func resolveHns(domain: String) -> HnsLookupResult  {
+    return try!  FfiConverterTypeHnsLookupResult_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_resolve_hns(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(domain),uniffiCallStatus
     )
 })
 }
@@ -1472,9 +1617,11 @@ open func resolveHnsVia(resolver: Data, domain: String)throws  -> Data {
     /**
      * Export this node's identity secret to persist (store it in the Keychain).
      */
-open func secret() -> Data {
+open func secret() -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_secret(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_secret(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1485,15 +1632,17 @@ open func secret() -> Data {
      * refuses anything else); `url` is the path+query only. Returns the request bundle id;
      * the response arrives via [`take_http_responses`].
      */
-open func sendHopsRequest(endpoint: Data, host: String, method: String, url: String, body: Data, maxResp: UInt32)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_hops_request(self.uniffiClonePointer(),
+open func sendHopsRequest(endpoint: Data, host: String, method: String, url: String, body: Data, maxResp: UInt32)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_hops_request(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(endpoint),
         FfiConverterString.lower(host),
         FfiConverterString.lower(method),
         FfiConverterString.lower(url),
         FfiConverterData.lower(body),
-        FfiConverterUInt32.lower(maxResp),$0
+        FfiConverterUInt32.lower(maxResp),uniffiCallStatus
     )
 })
 }
@@ -1501,45 +1650,51 @@ open func sendHopsRequest(endpoint: Data, host: String, method: String, url: Str
     /**
      * Seal an HTTP response back to a requester (gateway side).
      */
-open func sendHttpResponse(to: Data, forRequestId: Data, status: UInt16, body: Data)throws  {try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_http_response(self.uniffiClonePointer(),
+open func sendHttpResponse(to: Data, forRequestId: Data, status: UInt16, body: Data)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_http_response(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(to),
         FfiConverterData.lower(forRequestId),
         FfiConverterUInt16.lower(status),
-        FfiConverterData.lower(body),$0
+        FfiConverterData.lower(body),uniffiCallStatus
     )
 }
 }
     
     /**
-     * Send a peer message to `dst` (an address - sealing key is derived from it).
+     * Send a peer message to `dst` (an address — sealing key is derived from it).
      * **Untraceable by default** (DESIGN.md §39): no cleartext src/dst, the bundle floods
      * and is recognized only by `dst`. Still forward-secret + sender-authenticated. Returns
      * the bundle id. Set `request_ack` for a private delivery confirmation.
      */
-open func sendMessage(dst: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_message(self.uniffiClonePointer(),
+open func sendMessage(dst: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_message(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(dst),
         FfiConverterString.lower(contentType),
         FfiConverterData.lower(body),
-        FfiConverterBool.lower(requestAck),$0
+        FfiConverterBool.lower(requestAck),uniffiCallStatus
     )
 })
 }
     
     /**
-     * Send a peer message to `dst` with full §27 provenance - cleartext src/dst, route
+     * Send a peer message to `dst` with full §27 provenance — cleartext src/dst, route
      * learning, relay-vaccinating ACKs. The **opt-in traced** path; prefer [`Self::send_message`]
      * (untraceable) unless the user has explicitly chosen a traceable send.
      */
-open func sendMessageTraced(dst: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_message_traced(self.uniffiClonePointer(),
+open func sendMessageTraced(dst: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_message_traced(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(dst),
         FfiConverterString.lower(contentType),
         FfiConverterData.lower(body),
-        FfiConverterBool.lower(requestAck),$0
+        FfiConverterBool.lower(requestAck),uniffiCallStatus
     )
 })
 }
@@ -1550,13 +1705,15 @@ open func sendMessageTraced(dst: Data, contentType: String, body: Data, requestA
      * `take_service_responses` (decode an identify reply with `decode_identity`).
      * Returns the request id.
      */
-open func sendServiceRequest(dst: Data, service: String, method: String, args: Data)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_service_request(self.uniffiClonePointer(),
+open func sendServiceRequest(dst: Data, service: String, method: String, args: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_service_request(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(dst),
         FfiConverterString.lower(service),
         FfiConverterString.lower(method),
-        FfiConverterData.lower(args),$0
+        FfiConverterData.lower(args),uniffiCallStatus
     )
 })
 }
@@ -1565,13 +1722,15 @@ open func sendServiceRequest(dst: Data, service: String, method: String, args: D
      * Seal a response to a custom service request back to its caller (app side). Use
      * the [`ServiceReq`]'s `from` as `to` and its `request_id` as `for_request_id`.
      */
-open func sendServiceResponse(to: Data, forRequestId: Data, status: UInt16, body: Data)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_service_response(self.uniffiClonePointer(),
+open func sendServiceResponse(to: Data, forRequestId: Data, status: UInt16, body: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_service_response(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(to),
         FfiConverterData.lower(forRequestId),
         FfiConverterUInt16.lower(status),
-        FfiConverterData.lower(body),$0
+        FfiConverterData.lower(body),uniffiCallStatus
     )
 })
 }
@@ -1580,13 +1739,15 @@ open func sendServiceResponse(to: Data, forRequestId: Data, status: UInt16, body
      * Send a message to a directly-connected peer (sealed with the key learned at
      * handshake). Returns the bundle id; errors if not connected to that address.
      */
-open func sendTo(address: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError.lift) {
-    uniffi_hop_fn_method_hopnode_send_to(self.uniffiClonePointer(),
+open func sendTo(address: Data, contentType: String, body: Data, requestAck: Bool)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_send_to(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(address),
         FfiConverterString.lower(contentType),
         FfiConverterData.lower(body),
-        FfiConverterBool.lower(requestAck),$0
+        FfiConverterBool.lower(requestAck),uniffiCallStatus
     )
 })
 }
@@ -1596,9 +1757,11 @@ open func sendTo(address: Data, contentType: String, body: Data, requestAck: Boo
      * on, the host must service `take_dns_lookups` so the node can resolve HNS on its own
      * without any relay round-trip.
      */
-open func setInternet(on: Bool) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_set_internet(self.uniffiClonePointer(),
-        FfiConverterBool.lower(on),$0
+open func setInternet(on: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_set_internet(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(on),uniffiCallStatus
     )
 }
 }
@@ -1608,33 +1771,55 @@ open func setInternet(on: Bool) {try! rustCall() {
      * Pass an empty string to clear it (then identify reports no name → peers show the
      * short address).
      */
-open func setName(name: String) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_set_name(self.uniffiClonePointer(),
-        FfiConverterString.lower(name),$0
+open func setName(name: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_set_name(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(name),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Sign a self-certifying reachability record for this node's address, binding it to `endpoint`
+     * (e.g. `wss://myaddress.com/_hop`) for `ttl_secs`. Serve the bytes at `/.well-known/hop` or
+     * gossip them; verify with the free `verify_reach_record`. No DNS/DNSSEC needed: the record is
+     * signed by the address it names (DESIGN.md §30 endpoint discovery).
+     */
+open func signReachRecord(endpoint: String, ttlSecs: UInt32) -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_sign_reach_record(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(endpoint),
+        FfiConverterUInt32.lower(ttlSecs),uniffiCallStatus
+    )
+})
 }
     
     /**
      * Subscribe the directory to a service topic.
      */
-open func subscribe(topic: String) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_subscribe(self.uniffiClonePointer(),
-        FfiConverterString.lower(topic),$0
+open func subscribe(topic: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_subscribe(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(topic),uniffiCallStatus
     )
 }
 }
     
     /**
-     * Domains the node needs the host to resolve (DESIGN.md §30). For each, fetch the full
-     * DNSSEC chain over DoH - the `_hopaddress.<domain>` TXT (`type=16`) plus, for every zone
-     * from the domain up to the root, DNSKEY (`type=48`) and DS (`type=43`) - all with `do=1`,
-     * then hand the raw response bodies to `provide_dns_proof`. Core validates; the host never
-     * decides the address.
+     * Domains the node needs the host to resolve (DESIGN.md §30). For each, do a plain HTTPS GET
+     * of `https://<domain>/.well-known/hop` (the TLS certificate proves the domain), pull the
+     * reach record out of that JSON body, and hand its bytes to `provide_reach_record`. Core
+     * verifies the reach record against the address it carries; the host never decides the address.
      */
-open func takeDnsLookups() -> [String] {
+open func takeDnsLookups() -> [String]  {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_dns_lookups(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_dns_lookups(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1642,9 +1827,11 @@ open func takeDnsLookups() -> [String] {
     /**
      * Finished HNS resolutions (positive or negative), clearing the queue.
      */
-open func takeHnsResults() -> [HnsRecord] {
+open func takeHnsResults() -> [HnsRecord]  {
     return try!  FfiConverterSequenceTypeHnsRecord.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_hns_results(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_hns_results(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1652,9 +1839,11 @@ open func takeHnsResults() -> [HnsRecord] {
     /**
      * Drain invites we've received (DESIGN.md §32 Invite mode), clearing them.
      */
-open func takeHpsInvites() -> [HpsInvite] {
+open func takeHpsInvites() -> [HpsInvite]  {
     return try!  FfiConverterSequenceTypeHpsInvite.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_hps_invites(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_hps_invites(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1662,9 +1851,11 @@ open func takeHpsInvites() -> [HpsInvite] {
     /**
      * Drain received `hps://` messages (already decrypted + sender-verified), clearing them.
      */
-open func takeHpsMessages() -> [HpsMessage] {
+open func takeHpsMessages() -> [HpsMessage]  {
     return try!  FfiConverterSequenceTypeHpsMessage.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_hps_messages(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_hps_messages(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1672,9 +1863,11 @@ open func takeHpsMessages() -> [HpsMessage] {
     /**
      * Drain egress HTTP requests addressed to this node as a gateway.
      */
-open func takeHttpRequests() -> [HttpReq] {
+open func takeHttpRequests() -> [HttpReq]  {
     return try!  FfiConverterSequenceTypeHttpReq.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_http_requests(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_http_requests(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1682,9 +1875,11 @@ open func takeHttpRequests() -> [HttpReq] {
     /**
      * Drain HTTP responses sealed back to this node as a requester.
      */
-open func takeHttpResponses() -> [HttpResp] {
+open func takeHttpResponses() -> [HttpResp]  {
     return try!  FfiConverterSequenceTypeHttpResp.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_http_responses(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_http_responses(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1693,9 +1888,11 @@ open func takeHttpResponses() -> [HttpResp] {
      * Drain decrypted messages addressed to this node since the last call. Handles
      * both static-sealed and forward-secret session messages uniformly.
      */
-open func takeInbox() -> [InboxMessage] {
+open func takeInbox() -> [InboxMessage]  {
     return try!  FfiConverterSequenceTypeInboxMessage.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_inbox(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_inbox(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1704,9 +1901,11 @@ open func takeInbox() -> [InboxMessage] {
      * Drain custom service requests addressed to this node (built-in `hop.` services
      * are answered by the node and never appear here).
      */
-open func takeServiceRequests() -> [ServiceReq] {
+open func takeServiceRequests() -> [ServiceReq]  {
     return try!  FfiConverterSequenceTypeServiceReq.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_service_requests(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_service_requests(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1714,9 +1913,11 @@ open func takeServiceRequests() -> [ServiceReq] {
     /**
      * Drain service responses sealed back to this node as a caller.
      */
-open func takeServiceResponses() -> [ServiceResp] {
+open func takeServiceResponses() -> [ServiceResp]  {
     return try!  FfiConverterSequenceTypeServiceResp.lift(try! rustCall() {
-    uniffi_hop_fn_method_hopnode_take_service_responses(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_take_service_responses(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1724,73 +1925,68 @@ open func takeServiceResponses() -> [ServiceResp] {
     /**
      * Advance time: expire adverts, retransmit unacked bundles, prune dedup.
      */
-open func tick(nowMs: UInt64) {try! rustCall() {
-    uniffi_hop_fn_method_hopnode_tick(self.uniffiClonePointer(),
-        FfiConverterUInt64.lower(nowMs),$0
+open func tick(nowMs: UInt64)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_method_hopnode_tick(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(nowMs),uniffiCallStatus
     )
 }
 }
     
 
+    
 }
+
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeHopNode: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = HopNode
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> HopNode {
-        return HopNode(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> HopNode {
+        return HopNode(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: HopNode) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: HopNode) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HopNode {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: HopNode, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
 
-
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHopNode_lift(_ pointer: UnsafeMutableRawPointer) throws -> HopNode {
-    return try FfiConverterTypeHopNode.lift(pointer)
+public func FfiConverterTypeHopNode_lift(_ handle: UInt64) throws -> HopNode {
+    return try FfiConverterTypeHopNode.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeHopNode_lower(_ value: HopNode) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeHopNode_lower(_ value: HopNode) -> UInt64 {
     return FfiConverterTypeHopNode.lower(value)
 }
+
+
 
 
 /**
  * A live HNS cache entry for the debug view (DESIGN.md §30). `address` empty = a cached
  * negative; `ttl_secs` is the remaining lifetime, ticking down to expiry.
  */
-public struct HnsCacheEntry {
+public struct HnsCacheEntry: Equatable, Hashable {
     public var domain: String
     public var address: Data
     public var ttlSecs: UInt32
@@ -1802,31 +1998,15 @@ public struct HnsCacheEntry {
         self.address = address
         self.ttlSecs = ttlSecs
     }
+
+    
+
+    
 }
 
-
-
-extension HnsCacheEntry: Equatable, Hashable {
-    public static func ==(lhs: HnsCacheEntry, rhs: HnsCacheEntry) -> Bool {
-        if lhs.domain != rhs.domain {
-            return false
-        }
-        if lhs.address != rhs.address {
-            return false
-        }
-        if lhs.ttlSecs != rhs.ttlSecs {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(domain)
-        hasher.combine(address)
-        hasher.combine(ttlSecs)
-    }
-}
-
+#if compiler(>=6)
+extension HnsCacheEntry: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1868,7 +2048,7 @@ public func FfiConverterTypeHnsCacheEntry_lower(_ value: HnsCacheEntry) -> RustB
  * A finished HNS resolution (DESIGN.md §30). `address` empty = the domain has no
  * `_hopaddress` record (a resolution error, e.g. `hops://thisdoesnotexist.com`).
  */
-public struct HnsRecord {
+public struct HnsRecord: Equatable, Hashable {
     public var domain: String
     public var address: Data
 
@@ -1878,27 +2058,15 @@ public struct HnsRecord {
         self.domain = domain
         self.address = address
     }
+
+    
+
+    
 }
 
-
-
-extension HnsRecord: Equatable, Hashable {
-    public static func ==(lhs: HnsRecord, rhs: HnsRecord) -> Bool {
-        if lhs.domain != rhs.domain {
-            return false
-        }
-        if lhs.address != rhs.address {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(domain)
-        hasher.combine(address)
-    }
-}
-
+#if compiler(>=6)
+extension HnsRecord: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1937,7 +2105,7 @@ public func FfiConverterTypeHnsRecord_lower(_ value: HnsRecord) -> RustBuffer {
 /**
  * An invite we (member) received and may accept (DESIGN.md §32 Invite mode).
  */
-public struct HpsInvite {
+public struct HpsInvite: Equatable, Hashable {
     public var path: String
     public var host: Data
     public var kind: HpsKind
@@ -1949,31 +2117,15 @@ public struct HpsInvite {
         self.host = host
         self.kind = kind
     }
+
+    
+
+    
 }
 
-
-
-extension HpsInvite: Equatable, Hashable {
-    public static func ==(lhs: HpsInvite, rhs: HpsInvite) -> Bool {
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.kind != rhs.kind {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(path)
-        hasher.combine(host)
-        hasher.combine(kind)
-    }
-}
-
+#if compiler(>=6)
+extension HpsInvite: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2014,7 +2166,7 @@ public func FfiConverterTypeHpsInvite_lower(_ value: HpsInvite) -> RustBuffer {
 /**
  * A received `hps://` message, after decryption + sender verification (DESIGN.md §32).
  */
-public struct HpsMessage {
+public struct HpsMessage: Equatable, Hashable {
     public var path: String
     /**
      * The verified sender's address (for a channel, the writer; for a service, the host).
@@ -2032,31 +2184,15 @@ public struct HpsMessage {
         self.sender = sender
         self.body = body
     }
+
+    
+
+    
 }
 
-
-
-extension HpsMessage: Equatable, Hashable {
-    public static func ==(lhs: HpsMessage, rhs: HpsMessage) -> Bool {
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.sender != rhs.sender {
-            return false
-        }
-        if lhs.body != rhs.body {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(path)
-        hasher.combine(sender)
-        hasher.combine(body)
-    }
-}
-
+#if compiler(>=6)
+extension HpsMessage: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2095,9 +2231,9 @@ public func FfiConverterTypeHpsMessage_lower(_ value: HpsMessage) -> RustBuffer 
 
 
 /**
- * A topic we host or follow - for rebuilding the app's channel list after a restart.
+ * A topic we host or follow — for rebuilding the app's channel list after a restart.
  */
-public struct HpsMyTopic {
+public struct HpsMyTopic: Equatable, Hashable {
     public var host: Data
     public var path: String
     public var kind: HpsKind
@@ -2113,39 +2249,15 @@ public struct HpsMyTopic {
         self.hosting = hosting
         self.access = access
     }
+
+    
+
+    
 }
 
-
-
-extension HpsMyTopic: Equatable, Hashable {
-    public static func ==(lhs: HpsMyTopic, rhs: HpsMyTopic) -> Bool {
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.kind != rhs.kind {
-            return false
-        }
-        if lhs.hosting != rhs.hosting {
-            return false
-        }
-        if lhs.access != rhs.access {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(host)
-        hasher.combine(path)
-        hasher.combine(kind)
-        hasher.combine(hosting)
-        hasher.combine(access)
-    }
-}
-
+#if compiler(>=6)
+extension HpsMyTopic: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2190,7 +2302,7 @@ public func FfiConverterTypeHpsMyTopic_lower(_ value: HpsMyTopic) -> RustBuffer 
 /**
  * A discoverable topic surfaced by `browse_discoverable` (same-app only).
  */
-public struct HpsTopicInfo {
+public struct HpsTopicInfo: Equatable, Hashable {
     public var host: Data
     public var path: String
     public var kind: HpsKind
@@ -2208,43 +2320,15 @@ public struct HpsTopicInfo {
         self.summary = summary
         self.access = access
     }
+
+    
+
+    
 }
 
-
-
-extension HpsTopicInfo: Equatable, Hashable {
-    public static func ==(lhs: HpsTopicInfo, rhs: HpsTopicInfo) -> Bool {
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.kind != rhs.kind {
-            return false
-        }
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.summary != rhs.summary {
-            return false
-        }
-        if lhs.access != rhs.access {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(host)
-        hasher.combine(path)
-        hasher.combine(kind)
-        hasher.combine(title)
-        hasher.combine(summary)
-        hasher.combine(access)
-    }
-}
-
+#if compiler(>=6)
+extension HpsTopicInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2291,7 +2375,7 @@ public func FfiConverterTypeHpsTopicInfo_lower(_ value: HpsTopicInfo) -> RustBuf
 /**
  * An egress HTTP request a gateway should fulfill (Use Case A, §9).
  */
-public struct HttpReq {
+public struct HttpReq: Equatable, Hashable {
     /**
      * Requester's address (seal the response back to this).
      */
@@ -2329,47 +2413,15 @@ public struct HttpReq {
         self.body = body
         self.maxResp = maxResp
     }
+
+    
+
+    
 }
 
-
-
-extension HttpReq: Equatable, Hashable {
-    public static func ==(lhs: HttpReq, rhs: HttpReq) -> Bool {
-        if lhs.from != rhs.from {
-            return false
-        }
-        if lhs.requestId != rhs.requestId {
-            return false
-        }
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.method != rhs.method {
-            return false
-        }
-        if lhs.url != rhs.url {
-            return false
-        }
-        if lhs.body != rhs.body {
-            return false
-        }
-        if lhs.maxResp != rhs.maxResp {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(from)
-        hasher.combine(requestId)
-        hasher.combine(host)
-        hasher.combine(method)
-        hasher.combine(url)
-        hasher.combine(body)
-        hasher.combine(maxResp)
-    }
-}
-
+#if compiler(>=6)
+extension HttpReq: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2418,7 +2470,7 @@ public func FfiConverterTypeHttpReq_lower(_ value: HttpReq) -> RustBuffer {
 /**
  * An HTTP response sealed back to the requester.
  */
-public struct HttpResp {
+public struct HttpResp: Equatable, Hashable {
     public var from: Data
     public var forRequestId: Data
     public var status: UInt16
@@ -2442,39 +2494,15 @@ public struct HttpResp {
         self.contentType = contentType
         self.body = body
     }
+
+    
+
+    
 }
 
-
-
-extension HttpResp: Equatable, Hashable {
-    public static func ==(lhs: HttpResp, rhs: HttpResp) -> Bool {
-        if lhs.from != rhs.from {
-            return false
-        }
-        if lhs.forRequestId != rhs.forRequestId {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.contentType != rhs.contentType {
-            return false
-        }
-        if lhs.body != rhs.body {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(from)
-        hasher.combine(forRequestId)
-        hasher.combine(status)
-        hasher.combine(contentType)
-        hasher.combine(body)
-    }
-}
-
+#if compiler(>=6)
+extension HttpResp: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2519,7 +2547,7 @@ public func FfiConverterTypeHttpResp_lower(_ value: HttpResp) -> RustBuffer {
 /**
  * A node's identity, decoded from a `hop.identify` response (DESIGN.md §29).
  */
-public struct IdentityInfo {
+public struct IdentityInfo: Equatable, Hashable {
     /**
      * The node's full hop address.
      */
@@ -2551,31 +2579,15 @@ public struct IdentityInfo {
         self.name = name
         self.kind = kind
     }
+
+    
+
+    
 }
 
-
-
-extension IdentityInfo: Equatable, Hashable {
-    public static func ==(lhs: IdentityInfo, rhs: IdentityInfo) -> Bool {
-        if lhs.address != rhs.address {
-            return false
-        }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.kind != rhs.kind {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(address)
-        hasher.combine(name)
-        hasher.combine(kind)
-    }
-}
-
+#if compiler(>=6)
+extension IdentityInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2616,7 +2628,7 @@ public func FfiConverterTypeIdentityInfo_lower(_ value: IdentityInfo) -> RustBuf
 /**
  * A decrypted message delivered to this node.
  */
-public struct InboxMessage {
+public struct InboxMessage: Equatable, Hashable {
     /**
      * Sender's hop address (Ed25519 public key).
      */
@@ -2628,7 +2640,7 @@ public struct InboxMessage {
      */
     public var hops: UInt8
     /**
-     * Sender's clock (ms) when the message was created - signed by the sender.
+     * Sender's clock (ms) when the message was created — signed by the sender.
      * Subtract from local receive time for an end-to-end latency estimate.
      */
     public var createdAt: UInt64
@@ -2650,7 +2662,7 @@ public struct InboxMessage {
          * How many hops it travelled to reach us (A→B path length).
          */hops: UInt8, 
         /**
-         * Sender's clock (ms) when the message was created - signed by the sender.
+         * Sender's clock (ms) when the message was created — signed by the sender.
          * Subtract from local receive time for an end-to-end latency estimate.
          */createdAt: UInt64, 
         /**
@@ -2666,43 +2678,15 @@ public struct InboxMessage {
         self.createdAt = createdAt
         self.trace = trace
     }
+
+    
+
+    
 }
 
-
-
-extension InboxMessage: Equatable, Hashable {
-    public static func ==(lhs: InboxMessage, rhs: InboxMessage) -> Bool {
-        if lhs.from != rhs.from {
-            return false
-        }
-        if lhs.contentType != rhs.contentType {
-            return false
-        }
-        if lhs.body != rhs.body {
-            return false
-        }
-        if lhs.hops != rhs.hops {
-            return false
-        }
-        if lhs.createdAt != rhs.createdAt {
-            return false
-        }
-        if lhs.trace != rhs.trace {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(from)
-        hasher.combine(contentType)
-        hasher.combine(body)
-        hasher.combine(hops)
-        hasher.combine(createdAt)
-        hasher.combine(trace)
-    }
-}
-
+#if compiler(>=6)
+extension InboxMessage: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2749,7 +2733,7 @@ public func FfiConverterTypeInboxMessage_lower(_ value: InboxMessage) -> RustBuf
 /**
  * Delivery status of a message we sent (Sending / Sent N / Delivered).
  */
-public struct MessageStatus {
+public struct MessageStatus: Equatable, Hashable {
     /**
      * Distinct peers we've handed a copy to ("Sent N").
      */
@@ -2763,7 +2747,7 @@ public struct MessageStatus {
      */
     public var deliveryHops: UInt8
     /**
-     * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK -
+     * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK —
      * how long the message took to *reach* the recipient, NOT the round trip. 0 until delivered.
      */
     public var deliveryMs: UInt32
@@ -2781,7 +2765,7 @@ public struct MessageStatus {
          * Forward path length the destination observed (hops to delivery; 0 until delivered).
          */deliveryHops: UInt8, 
         /**
-         * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK -
+         * **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK —
          * how long the message took to *reach* the recipient, NOT the round trip. 0 until delivered.
          */deliveryMs: UInt32) {
         self.relayed = relayed
@@ -2789,35 +2773,15 @@ public struct MessageStatus {
         self.deliveryHops = deliveryHops
         self.deliveryMs = deliveryMs
     }
+
+    
+
+    
 }
 
-
-
-extension MessageStatus: Equatable, Hashable {
-    public static func ==(lhs: MessageStatus, rhs: MessageStatus) -> Bool {
-        if lhs.relayed != rhs.relayed {
-            return false
-        }
-        if lhs.delivered != rhs.delivered {
-            return false
-        }
-        if lhs.deliveryHops != rhs.deliveryHops {
-            return false
-        }
-        if lhs.deliveryMs != rhs.deliveryMs {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(relayed)
-        hasher.combine(delivered)
-        hasher.combine(deliveryHops)
-        hasher.combine(deliveryMs)
-    }
-}
-
+#if compiler(>=6)
+extension MessageStatus: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2860,7 +2824,7 @@ public func FfiConverterTypeMessageStatus_lower(_ value: MessageStatus) -> RustB
 /**
  * Opaque bytes to ship over the bearer on a given connection.
  */
-public struct OutPacket {
+public struct OutPacket: Equatable, Hashable {
     public var link: UInt64
     public var bytes: Data
 
@@ -2870,27 +2834,15 @@ public struct OutPacket {
         self.link = link
         self.bytes = bytes
     }
+
+    
+
+    
 }
 
-
-
-extension OutPacket: Equatable, Hashable {
-    public static func ==(lhs: OutPacket, rhs: OutPacket) -> Bool {
-        if lhs.link != rhs.link {
-            return false
-        }
-        if lhs.bytes != rhs.bytes {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(link)
-        hasher.combine(bytes)
-    }
-}
-
+#if compiler(>=6)
+extension OutPacket: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2930,7 +2882,7 @@ public func FfiConverterTypeOutPacket_lower(_ value: OutPacket) -> RustBuffer {
  * A live link to a directly-connected peer: its address + the bearer link id. The
  * host maps the link id to a transport (e.g. < 10000 = Bluetooth, ≥ 10000 = Wi-Fi).
  */
-public struct PeerLink {
+public struct PeerLink: Equatable, Hashable {
     public var address: Data
     public var link: UInt64
 
@@ -2940,27 +2892,15 @@ public struct PeerLink {
         self.address = address
         self.link = link
     }
+
+    
+
+    
 }
 
-
-
-extension PeerLink: Equatable, Hashable {
-    public static func ==(lhs: PeerLink, rhs: PeerLink) -> Bool {
-        if lhs.address != rhs.address {
-            return false
-        }
-        if lhs.link != rhs.link {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(address)
-        hasher.combine(link)
-    }
-}
-
+#if compiler(>=6)
+extension PeerLink: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -2999,7 +2939,7 @@ public func FfiConverterTypePeerLink_lower(_ value: PeerLink) -> RustBuffer {
 /**
  * An item in the relay queue: ours awaiting send, or a peer's awaiting relay.
  */
-public struct QueueItem {
+public struct QueueItem: Equatable, Hashable {
     public var id: Data
     /**
      * True = our own message (pinned). False = relaying for a peer (decays).
@@ -3027,39 +2967,15 @@ public struct QueueItem {
         self.priority = priority
         self.hops = hops
     }
+
+    
+
+    
 }
 
-
-
-extension QueueItem: Equatable, Hashable {
-    public static func ==(lhs: QueueItem, rhs: QueueItem) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.own != rhs.own {
-            return false
-        }
-        if lhs.to != rhs.to {
-            return false
-        }
-        if lhs.priority != rhs.priority {
-            return false
-        }
-        if lhs.hops != rhs.hops {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(own)
-        hasher.combine(to)
-        hasher.combine(priority)
-        hasher.combine(hops)
-    }
-}
-
+#if compiler(>=6)
+extension QueueItem: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3102,13 +3018,95 @@ public func FfiConverterTypeQueueItem_lower(_ value: QueueItem) -> RustBuffer {
 
 
 /**
+ * A verified reachability record (see `HopNode::sign_reach_record` + `verify_reach_record`).
+ * `valid` false = the signature failed or the record expired; the other fields are then meaningless.
+ */
+public struct ReachInfo: Equatable, Hashable {
+    public var valid: Bool
+    /**
+     * The reachable Hop address (32 bytes) the record self-certifies.
+     */
+    public var address: Data
+    /**
+     * The endpoint spec, e.g. `wss://myaddress.com/_hop` or `1.2.3.4:9944`.
+     */
+    public var endpoint: String
+    public var issuedAt: UInt64
+    public var ttlSecs: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(valid: Bool, 
+        /**
+         * The reachable Hop address (32 bytes) the record self-certifies.
+         */address: Data, 
+        /**
+         * The endpoint spec, e.g. `wss://myaddress.com/_hop` or `1.2.3.4:9944`.
+         */endpoint: String, issuedAt: UInt64, ttlSecs: UInt32) {
+        self.valid = valid
+        self.address = address
+        self.endpoint = endpoint
+        self.issuedAt = issuedAt
+        self.ttlSecs = ttlSecs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReachInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReachInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReachInfo {
+        return
+            try ReachInfo(
+                valid: FfiConverterBool.read(from: &buf), 
+                address: FfiConverterData.read(from: &buf), 
+                endpoint: FfiConverterString.read(from: &buf), 
+                issuedAt: FfiConverterUInt64.read(from: &buf), 
+                ttlSecs: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReachInfo, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.valid, into: &buf)
+        FfiConverterData.write(value.address, into: &buf)
+        FfiConverterString.write(value.endpoint, into: &buf)
+        FfiConverterUInt64.write(value.issuedAt, into: &buf)
+        FfiConverterUInt32.write(value.ttlSecs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReachInfo_lift(_ buf: RustBuffer) throws -> ReachInfo {
+    return try FfiConverterTypeReachInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReachInfo_lower(_ value: ReachInfo) -> RustBuffer {
+    return FfiConverterTypeReachInfo.lower(value)
+}
+
+
+/**
  * A service advert discovered via gossip (direct or relayed). The `publisher` is
- * the address to message - its sealing key is derived from it. Apps build presence
+ * the address to message — its sealing key is derived from it. Apps build presence
  * and contacts on this (e.g. a "presence" service whose `title` is a display name).
  */
-public struct ServiceHit {
+public struct ServiceHit: Equatable, Hashable {
     /**
-     * Publisher's hop address (Ed25519 public key) - message this to reach them.
+     * Publisher's hop address (Ed25519 public key) — message this to reach them.
      */
     public var publisher: Data
     public var service: String
@@ -3120,7 +3118,7 @@ public struct ServiceHit {
      */
     public var hops: UInt8
     /**
-     * Publisher clock (ms) when this advert was created - lets the app pick the
+     * Publisher clock (ms) when this advert was created — lets the app pick the
      * freshest record per publisher (e.g. current foreground/background state).
      */
     public var createdAt: UInt64
@@ -3129,13 +3127,13 @@ public struct ServiceHit {
     // declare one manually.
     public init(
         /**
-         * Publisher's hop address (Ed25519 public key) - message this to reach them.
+         * Publisher's hop address (Ed25519 public key) — message this to reach them.
          */publisher: Data, service: String, title: String, summary: String, tags: [String], 
         /**
          * Hops away through the mesh (1 = direct neighbour, ≥2 = via relays; 0 = unknown).
          */hops: UInt8, 
         /**
-         * Publisher clock (ms) when this advert was created - lets the app pick the
+         * Publisher clock (ms) when this advert was created — lets the app pick the
          * freshest record per publisher (e.g. current foreground/background state).
          */createdAt: UInt64) {
         self.publisher = publisher
@@ -3146,47 +3144,15 @@ public struct ServiceHit {
         self.hops = hops
         self.createdAt = createdAt
     }
+
+    
+
+    
 }
 
-
-
-extension ServiceHit: Equatable, Hashable {
-    public static func ==(lhs: ServiceHit, rhs: ServiceHit) -> Bool {
-        if lhs.publisher != rhs.publisher {
-            return false
-        }
-        if lhs.service != rhs.service {
-            return false
-        }
-        if lhs.title != rhs.title {
-            return false
-        }
-        if lhs.summary != rhs.summary {
-            return false
-        }
-        if lhs.tags != rhs.tags {
-            return false
-        }
-        if lhs.hops != rhs.hops {
-            return false
-        }
-        if lhs.createdAt != rhs.createdAt {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(publisher)
-        hasher.combine(service)
-        hasher.combine(title)
-        hasher.combine(summary)
-        hasher.combine(tags)
-        hasher.combine(hops)
-        hasher.combine(createdAt)
-    }
-}
-
+#if compiler(>=6)
+extension ServiceHit: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3235,10 +3201,10 @@ public func FfiConverterTypeServiceHit_lower(_ value: ServiceHit) -> RustBuffer 
 /**
  * A custom (non-`hop.`) service request addressed to this node for the app to fulfill.
  */
-public struct ServiceReq {
+public struct ServiceReq: Equatable, Hashable {
     public var from: Data
     /**
-     * Request id - pass back to `send_service_response` as `for_request_id`.
+     * Request id — pass back to `send_service_response` as `for_request_id`.
      */
     public var requestId: Data
     public var service: String
@@ -3249,7 +3215,7 @@ public struct ServiceReq {
     // declare one manually.
     public init(from: Data, 
         /**
-         * Request id - pass back to `send_service_response` as `for_request_id`.
+         * Request id — pass back to `send_service_response` as `for_request_id`.
          */requestId: Data, service: String, method: String, args: Data) {
         self.from = from
         self.requestId = requestId
@@ -3257,39 +3223,15 @@ public struct ServiceReq {
         self.method = method
         self.args = args
     }
+
+    
+
+    
 }
 
-
-
-extension ServiceReq: Equatable, Hashable {
-    public static func ==(lhs: ServiceReq, rhs: ServiceReq) -> Bool {
-        if lhs.from != rhs.from {
-            return false
-        }
-        if lhs.requestId != rhs.requestId {
-            return false
-        }
-        if lhs.service != rhs.service {
-            return false
-        }
-        if lhs.method != rhs.method {
-            return false
-        }
-        if lhs.args != rhs.args {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(from)
-        hasher.combine(requestId)
-        hasher.combine(service)
-        hasher.combine(method)
-        hasher.combine(args)
-    }
-}
-
+#if compiler(>=6)
+extension ServiceReq: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3334,7 +3276,7 @@ public func FfiConverterTypeServiceReq_lower(_ value: ServiceReq) -> RustBuffer 
 /**
  * A service response sealed back to this node as a caller.
  */
-public struct ServiceResp {
+public struct ServiceResp: Equatable, Hashable {
     public var from: Data
     public var forRequestId: Data
     public var status: UInt16
@@ -3348,35 +3290,15 @@ public struct ServiceResp {
         self.status = status
         self.body = body
     }
+
+    
+
+    
 }
 
-
-
-extension ServiceResp: Equatable, Hashable {
-    public static func ==(lhs: ServiceResp, rhs: ServiceResp) -> Bool {
-        if lhs.from != rhs.from {
-            return false
-        }
-        if lhs.forRequestId != rhs.forRequestId {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        if lhs.body != rhs.body {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(from)
-        hasher.combine(forRequestId)
-        hasher.combine(status)
-        hasher.combine(body)
-    }
-}
-
+#if compiler(>=6)
+extension ServiceResp: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3419,7 +3341,7 @@ public func FfiConverterTypeServiceResp_lower(_ value: ServiceResp) -> RustBuffe
 /**
  * One forwarding hop in a message's provenance trace (DESIGN.md §27).
  */
-public struct TraceHopInfo {
+public struct TraceHopInfo: Equatable, Hashable {
     /**
      * The forwarder's 8-byte short address. Compare to `short_address(full)` of a known
      * peer/relay/contact to resolve it to a display name; show hex if unknown.
@@ -3443,27 +3365,15 @@ public struct TraceHopInfo {
         self.node = node
         self.appLabel = appLabel
     }
+
+    
+
+    
 }
 
-
-
-extension TraceHopInfo: Equatable, Hashable {
-    public static func ==(lhs: TraceHopInfo, rhs: TraceHopInfo) -> Bool {
-        if lhs.node != rhs.node {
-            return false
-        }
-        if lhs.appLabel != rhs.appLabel {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(node)
-        hasher.combine(appLabel)
-    }
-}
-
+#if compiler(>=6)
+extension TraceHopInfo: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3502,15 +3412,29 @@ public func FfiConverterTypeTraceHopInfo_lower(_ value: TraceHopInfo) -> RustBuf
 /**
  * Errors crossing the FFI boundary.
  */
-public enum FfiError {
+public 
+enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
     case BadKey
     case Hop(String
     )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension FfiError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3554,21 +3478,26 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 }
 
 
-extension FfiError: Equatable, Hashable {}
-
-extension FfiError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiError_lift(_ buf: RustBuffer) throws -> FfiError {
+    return try FfiConverterTypeFfiError.lift(buf)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
+    return FfiConverterTypeFfiError.lower(value)
+}
+
+
 /**
  * Outcome of starting an HNS resolution (DESIGN.md §30).
  */
 
-public enum HnsLookupResult {
+public enum HnsLookupResult: Equatable, Hashable {
     
     /**
      * Served from a fresh cache entry. `address` empty = a cached negative.
@@ -3581,12 +3510,20 @@ public enum HnsLookupResult {
      */
     case pending
     /**
-     * This device has no internet and no resolver was given - call `resolve_hns_via` with a
+     * This device has no internet and no resolver was given — call `resolve_hns_via` with a
      * known internet-connected peer (e.g. a relay address).
      */
     case needsResolver
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension HnsLookupResult: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3646,17 +3583,11 @@ public func FfiConverterTypeHnsLookupResult_lower(_ value: HnsLookupResult) -> R
 
 
 
-extension HnsLookupResult: Equatable, Hashable {}
-
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Who may obtain a topic's keys (DESIGN.md §32).
  */
 
-public enum HpsAccess {
+public enum HpsAccess: Equatable, Hashable {
     
     /**
      * Keys handed to anyone who asks (anonymous membership).
@@ -3670,8 +3601,16 @@ public enum HpsAccess {
      * Host invites a destination; the destination accepts, then receives keys.
      */
     case invite
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension HpsAccess: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3729,17 +3668,11 @@ public func FfiConverterTypeHpsAccess_lower(_ value: HpsAccess) -> RustBuffer {
 
 
 
-extension HpsAccess: Equatable, Hashable {}
-
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * The kind of `hps://` topic hosted at a path (DESIGN.md §32).
  */
 
-public enum HpsKind {
+public enum HpsKind: Equatable, Hashable {
     
     /**
      * Anyone with the content key reads AND writes; each post signed by its writer.
@@ -3749,8 +3682,16 @@ public enum HpsKind {
      * Only the owner broadcasts (signed by the service key); subscribers read.
      */
     case service
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension HpsKind: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3802,17 +3743,11 @@ public func FfiConverterTypeHpsKind_lower(_ value: HpsKind) -> RustBuffer {
 
 
 
-extension HpsKind: Equatable, Hashable {}
-
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Whether a topic announces itself for discovery (DESIGN.md §32).
  */
 
-public enum HpsVisibility {
+public enum HpsVisibility: Equatable, Hashable {
     
     /**
      * Reachable only by known address+path or an invite.
@@ -3822,8 +3757,16 @@ public enum HpsVisibility {
      * Host broadcasts an (app-encrypted) discovery advert so same-app peers can browse it.
      */
     case discoverable
+
+
+
+
+
 }
 
+#if compiler(>=6)
+extension HpsVisibility: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -3872,11 +3815,6 @@ public func FfiConverterTypeHpsVisibility_lift(_ buf: RustBuffer) throws -> HpsV
 public func FfiConverterTypeHpsVisibility_lower(_ value: HpsVisibility) -> RustBuffer {
     return FfiConverterTypeHpsVisibility.lower(value)
 }
-
-
-
-extension HpsVisibility: Equatable, Hashable {}
-
 
 
 #if swift(>=5.8)
@@ -4355,20 +4293,22 @@ fileprivate struct FfiConverterSequenceTypeTraceHopInfo: FfiConverterRustBuffer 
 /**
  * Render an address as base58 (compact, copy/paste/QR-friendly).
  */
-public func addressBase58(address: Data) -> String {
+public func addressBase58(address: Data) -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_func_address_base58(
-        FfiConverterData.lower(address),$0
+        FfiConverterData.lower(address),uniffiCallStatus
     )
 })
 }
 /**
  * Decode a base58 address back to bytes (empty on invalid input).
  */
-public func addressFromBase58(text: String) -> Data {
+public func addressFromBase58(text: String) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_func_address_from_base58(
-        FfiConverterString.lower(text),$0
+        FfiConverterString.lower(text),uniffiCallStatus
     )
 })
 }
@@ -4376,31 +4316,49 @@ public func addressFromBase58(text: String) -> Data {
  * Decode a `hop.identify` response body into an [`IdentityInfo`]. Returns `None` if the
  * bytes aren't a valid identity record (e.g. the response was for a different service).
  */
-public func decodeIdentity(body: Data) -> IdentityInfo? {
+public func decodeIdentity(body: Data) -> IdentityInfo?  {
     return try!  FfiConverterOptionTypeIdentityInfo.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_func_decode_identity(
-        FfiConverterData.lower(body),$0
+        FfiConverterData.lower(body),uniffiCallStatus
     )
 })
 }
 /**
- * The built-in identity service name (`hop.identify`) - call it on a peer to learn its
+ * The built-in identity service name (`hop.identify`) — call it on a peer to learn its
  * display name + kind (DESIGN.md §29).
  */
-public func serviceIdentify() -> String {
+public func serviceIdentify() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_hop_fn_func_service_identify($0
+        uniffiCallStatus in
+    uniffi_hop_fn_func_service_identify(uniffiCallStatus
     )
 })
 }
 /**
- * The 8-byte short form of a full address - matches what trace hops carry, so the app
+ * The 8-byte short form of a full address — matches what trace hops carry, so the app
  * can index its known addresses by this and resolve trace hops to display names (§27).
  */
-public func shortAddress(address: Data) -> Data {
+public func shortAddress(address: Data) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_hop_fn_func_short_address(
-        FfiConverterData.lower(address),$0
+        FfiConverterData.lower(address),uniffiCallStatus
+    )
+})
+}
+/**
+ * Verify a self-certifying reachability record (from `HopNode::sign_reach_record`, a
+ * `/.well-known/hop` body, or gossip). `now_secs` = current Unix time to enforce expiry, or 0 to
+ * skip the expiry check. Returns `valid=true` iff the signature is by the address the record names
+ * and (when checked) it is unexpired. No trust anchor is consulted; the record certifies itself.
+ */
+public func verifyReachRecord(bytes: Data, nowSecs: UInt64) -> ReachInfo  {
+    return try!  FfiConverterTypeReachInfo_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_hop_fn_func_verify_reach_record(
+        FfiConverterData.lower(bytes),
+        FfiConverterUInt64.lower(nowSecs),uniffiCallStatus
     )
 })
 }
@@ -4412,226 +4370,231 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 26
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_hop_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_hop_checksum_func_address_base58() != 14545) {
+    if (uniffi_hop_checksum_func_address_base58() != 21221) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_func_address_from_base58() != 31141) {
+    if (uniffi_hop_checksum_func_address_from_base58() != 6490) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_func_decode_identity() != 1621) {
+    if (uniffi_hop_checksum_func_decode_identity() != 2531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_func_service_identify() != 47696) {
+    if (uniffi_hop_checksum_func_service_identify() != 48372) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_func_short_address() != 7563) {
+    if (uniffi_hop_checksum_func_short_address() != 5501) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_address() != 37313) {
+    if (uniffi_hop_checksum_func_verify_reach_record() != 1721) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_browse() != 10603) {
+    if (uniffi_hop_checksum_method_hopnode_address() != 32940) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_browse_discoverable() != 58666) {
+    if (uniffi_hop_checksum_method_hopnode_browse() != 53632) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_clear_queue() != 33831) {
+    if (uniffi_hop_checksum_method_hopnode_browse_discoverable() != 46808) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_connected() != 48429) {
+    if (uniffi_hop_checksum_method_hopnode_clear_queue() != 29543) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_disconnected() != 56072) {
+    if (uniffi_hop_checksum_method_hopnode_connected() != 31490) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_drain_outgoing() != 15620) {
+    if (uniffi_hop_checksum_method_hopnode_disconnected() != 51113) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hns_cache() != 53701) {
+    if (uniffi_hop_checksum_method_hopnode_drain_outgoing() != 30959) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_accept_invite() != 27024) {
+    if (uniffi_hop_checksum_method_hopnode_hns_cache() != 26000) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_approve() != 57644) {
+    if (uniffi_hop_checksum_method_hopnode_hps_accept_invite() != 51378) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_decline_invite() != 18558) {
+    if (uniffi_hop_checksum_method_hopnode_hps_approve() != 19823) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_deny() != 62430) {
+    if (uniffi_hop_checksum_method_hopnode_hps_decline_invite() != 1644) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_invite() != 49424) {
+    if (uniffi_hop_checksum_method_hopnode_hps_deny() != 25259) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_leave() != 48598) {
+    if (uniffi_hop_checksum_method_hopnode_hps_invite() != 22088) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_members() != 16716) {
+    if (uniffi_hop_checksum_method_hopnode_hps_leave() != 12917) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_my_topics() != 58572) {
+    if (uniffi_hop_checksum_method_hopnode_hps_members() != 31328) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_pending() != 5810) {
+    if (uniffi_hop_checksum_method_hopnode_hps_my_topics() != 39116) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_publish() != 27020) {
+    if (uniffi_hop_checksum_method_hopnode_hps_pending() != 22401) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_reach() != 30611) {
+    if (uniffi_hop_checksum_method_hopnode_hps_publish() != 18817) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_rekey() != 46312) {
+    if (uniffi_hop_checksum_method_hopnode_hps_reach() != 16760) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_hps_subscribe() != 60937) {
+    if (uniffi_hop_checksum_method_hopnode_hps_rekey() != 3381) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_is_internet() != 55400) {
+    if (uniffi_hop_checksum_method_hopnode_hps_subscribe() != 29145) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_is_persistent() != 46954) {
+    if (uniffi_hop_checksum_method_hopnode_is_internet() != 44688) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_is_secured() != 40438) {
+    if (uniffi_hop_checksum_method_hopnode_is_persistent() != 839) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_knows_route() != 18753) {
+    if (uniffi_hop_checksum_method_hopnode_is_secured() != 24182) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_message_status() != 42362) {
+    if (uniffi_hop_checksum_method_hopnode_knows_route() != 34834) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_name() != 58060) {
+    if (uniffi_hop_checksum_method_hopnode_message_status() != 10302) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_peer_links() != 26291) {
+    if (uniffi_hop_checksum_method_hopnode_name() != 34555) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_peers() != 51471) {
+    if (uniffi_hop_checksum_method_hopnode_peer_links() != 62862) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_pending_count() != 64928) {
+    if (uniffi_hop_checksum_method_hopnode_peers() != 60549) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_provide_dns_proof() != 60688) {
+    if (uniffi_hop_checksum_method_hopnode_pending_count() != 59923) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_publish_prekey() != 33799) {
+    if (uniffi_hop_checksum_method_hopnode_provide_reach_record() != 24787) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_publish_service() != 10359) {
+    if (uniffi_hop_checksum_method_hopnode_publish_prekey() != 17970) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_queue() != 37569) {
+    if (uniffi_hop_checksum_method_hopnode_publish_service() != 29865) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_received() != 45503) {
+    if (uniffi_hop_checksum_method_hopnode_queue() != 17386) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_register_service() != 64316) {
+    if (uniffi_hop_checksum_method_hopnode_received() != 63456) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_rehydrate_dropped() != 35539) {
+    if (uniffi_hop_checksum_method_hopnode_register_service() != 47758) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_resolve_hns() != 18659) {
+    if (uniffi_hop_checksum_method_hopnode_rehydrate_dropped() != 26481) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_resolve_hns_via() != 42101) {
+    if (uniffi_hop_checksum_method_hopnode_resolve_hns() != 47453) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_secret() != 26710) {
+    if (uniffi_hop_checksum_method_hopnode_secret() != 5146) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_hops_request() != 42617) {
+    if (uniffi_hop_checksum_method_hopnode_send_hops_request() != 18023) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_http_response() != 33943) {
+    if (uniffi_hop_checksum_method_hopnode_send_http_response() != 54133) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_message() != 37867) {
+    if (uniffi_hop_checksum_method_hopnode_send_message() != 61882) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_message_traced() != 46251) {
+    if (uniffi_hop_checksum_method_hopnode_send_message_traced() != 30502) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_service_request() != 12291) {
+    if (uniffi_hop_checksum_method_hopnode_send_service_request() != 22020) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_service_response() != 60359) {
+    if (uniffi_hop_checksum_method_hopnode_send_service_response() != 55486) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_send_to() != 47300) {
+    if (uniffi_hop_checksum_method_hopnode_send_to() != 16734) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_set_internet() != 21425) {
+    if (uniffi_hop_checksum_method_hopnode_set_internet() != 17745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_set_name() != 51866) {
+    if (uniffi_hop_checksum_method_hopnode_set_name() != 47967) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_subscribe() != 48136) {
+    if (uniffi_hop_checksum_method_hopnode_sign_reach_record() != 49205) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_dns_lookups() != 46085) {
+    if (uniffi_hop_checksum_method_hopnode_subscribe() != 2120) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_hns_results() != 61602) {
+    if (uniffi_hop_checksum_method_hopnode_take_dns_lookups() != 61420) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_hps_invites() != 3110) {
+    if (uniffi_hop_checksum_method_hopnode_take_hns_results() != 29623) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_hps_messages() != 32853) {
+    if (uniffi_hop_checksum_method_hopnode_take_hps_invites() != 4956) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_http_requests() != 8314) {
+    if (uniffi_hop_checksum_method_hopnode_take_hps_messages() != 23709) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_http_responses() != 64364) {
+    if (uniffi_hop_checksum_method_hopnode_take_http_requests() != 30591) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_inbox() != 56055) {
+    if (uniffi_hop_checksum_method_hopnode_take_http_responses() != 65267) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_service_requests() != 33678) {
+    if (uniffi_hop_checksum_method_hopnode_take_inbox() != 47366) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_take_service_responses() != 34538) {
+    if (uniffi_hop_checksum_method_hopnode_take_service_requests() != 16443) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_method_hopnode_tick() != 37002) {
+    if (uniffi_hop_checksum_method_hopnode_take_service_responses() != 31808) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_constructor_hopnode_new() != 5326) {
+    if (uniffi_hop_checksum_method_hopnode_tick() != 24131) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_constructor_hopnode_open() != 29192) {
+    if (uniffi_hop_checksum_constructor_hopnode_new() != 49992) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_constructor_hopnode_open_keyed() != 30358) {
+    if (uniffi_hop_checksum_constructor_hopnode_open() != 36310) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_hop_checksum_constructor_hopnode_with_secret() != 186) {
+    if (uniffi_hop_checksum_constructor_hopnode_open_keyed() != 54913) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_hop_checksum_constructor_hopnode_with_secret() != 52263) {
         return InitializationResult.apiChecksumMismatch
     }
 
     return InitializationResult.ok
 }()
 
-private func uniffiEnsureInitialized() {
+// Make the ensure init function public so that other modules which have external type references to
+// our types can call it.
+public func uniffiEnsureHopInitialized() {
     switch initializationResult {
     case .ok:
         break
