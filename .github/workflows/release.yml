@@ -1,0 +1,41 @@
+# Cut a GitHub Release when a semver tag is pushed. This Swift package publishes BY GIT TAG: Swift
+# Package Manager resolves a tagged commit directly, there is no registry and no token beyond the
+# built-in GITHUB_TOKEN. The tag itself IS the release. Consumers pin it with:
+#
+#     .package(url: "https://github.com/hopmesh/hop-driver-apple.git", from: "X.Y.Z")
+#
+# This file is carried in from the Hop monorepo subtree (drivers/apple/HopDriver) by Copybara, where it
+# becomes the repo-root release workflow of the hopmesh/hop-driver-apple mirror. Edit it in the
+# monorepo, never here.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Describe the package (light gate, no full build)
+        # A full `swift build` binds libhop through the hopFFI binary target (Frameworks/HopFFI.xcframework),
+        # a gitignored artifact built by tools/build-xcframework.sh, and pulls the sibling sdk/apple and
+        # bearers/apple packages, none of which a bare mirror runner has, so it cannot gate the release.
+        # `swift package describe` parses Package.swift and dumps the target graph, catching a broken
+        # manifest. It is best effort (resolving the graph may still reach for the missing siblings and
+        # xcframework), so it never blocks the release. The full build plus `swift test` runs in the
+        # monorepo CI where the xcframework and siblings are present.
+        continue-on-error: true
+        run: swift package describe
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
