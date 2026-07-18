@@ -90,9 +90,7 @@ final class MultipartTests: XCTestCase {
         XCTAssertTrue(HopBearer.decodeMultipart(data).isEmpty)
     }
 
-    func testDecodeTruncatedMidBodyStopsAtLastCompletePart() {
-        // Two complete parts then a third whose declared body runs past the buffer: the two good parts are
-        // returned and the truncated tail is dropped (guard i + bl <= b.count -> break).
+    func testDecodeTruncatedMidBodyRejectsTheWholePayload() {
         let good = HopBearer.encodeMultipart([("a", Data([0x01])), ("b", Data([0x02]))])
         var mutated = good
         // Append a malformed 3rd-part header claiming a huge body with no bytes behind it, and bump count.
@@ -100,7 +98,6 @@ final class MultipartTests: XCTestCase {
         mutated.append(contentsOf: [0x00, 0x01, 0x63])                  // ctLen=1, "c"
         mutated.append(contentsOf: [0x7F, 0xFF, 0xFF, 0xFF])            // bodyLen ~2GiB, absent
         let out = HopBearer.decodeMultipart(mutated)
-        XCTAssertEqual(out.count, 2, "the truncated third part is dropped, the first two survive")
-        XCTAssertEqual(out.map { $0.0 }, ["a", "b"])
+        XCTAssertTrue(out.isEmpty, "attacker-controlled multipart never yields partial success")
     }
 }

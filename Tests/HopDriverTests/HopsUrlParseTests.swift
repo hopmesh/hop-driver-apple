@@ -52,4 +52,19 @@ final class HopsUrlParseTests: XCTestCase {
         XCTAssertEqual(r.domain, "acme.hop")
         XCTAssertEqual(r.path, "/status")
     }
+
+    func testSchemeAndHostAreCanonicalizedCaseInsensitively() {
+        let r = HopBearer.parseHops("HOPS://ACME.HOP/a?q=1")
+        XCTAssertEqual(r.domain, "acme.hop")
+        XCTAssertEqual(r.path, "/a?q=1")
+    }
+
+    func testRejectsNonHopsCredentialsPortsFragmentsAndAmbiguousAuthorities() {
+        for raw in [
+            "https://acme.hop/", "hops://user@acme.hop/", "hops://acme.hop:443/",
+            "hops://acme.hop/#fragment", "hops://acme.hop\\@evil.test/", "hops:opaque",
+        ] {
+            XCTAssertTrue(HopBearer.parseHops(raw).domain.isEmpty, raw)
+        }
+    }
 }

@@ -50,9 +50,9 @@ typedef void (*UniffiRustFutureContinuationCallback)(uint64_t, int8_t
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_FREE
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_FREE
-typedef void (*UniffiForeignFutureFree)(uint64_t
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK
+typedef void (*UniffiForeignFutureDroppedCallback)(uint64_t
     );
 
 #endif
@@ -62,524 +62,536 @@ typedef void (*UniffiCallbackInterfaceFree)(uint64_t
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE
-typedef struct UniffiForeignFuture {
-    uint64_t handle;
-    UniffiForeignFutureFree _Nonnull free;
-} UniffiForeignFuture;
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLONE
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_CLONE
+typedef uint64_t (*UniffiCallbackInterfaceClone)(uint64_t
+    );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U8
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U8
-typedef struct UniffiForeignFutureStructU8 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK_STRUCT
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_DROPPED_CALLBACK_STRUCT
+typedef struct UniffiForeignFutureDroppedCallbackStruct {
+    uint64_t handle;
+    UniffiForeignFutureDroppedCallback _Nonnull free;
+} UniffiForeignFutureDroppedCallbackStruct;
+
+#endif
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U8
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U8
+typedef struct UniffiForeignFutureResultU8 {
     uint8_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU8;
+} UniffiForeignFutureResultU8;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U8
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U8
-typedef void (*UniffiForeignFutureCompleteU8)(uint64_t, UniffiForeignFutureStructU8
+typedef void (*UniffiForeignFutureCompleteU8)(uint64_t, UniffiForeignFutureResultU8
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I8
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I8
-typedef struct UniffiForeignFutureStructI8 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I8
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I8
+typedef struct UniffiForeignFutureResultI8 {
     int8_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI8;
+} UniffiForeignFutureResultI8;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I8
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I8
-typedef void (*UniffiForeignFutureCompleteI8)(uint64_t, UniffiForeignFutureStructI8
+typedef void (*UniffiForeignFutureCompleteI8)(uint64_t, UniffiForeignFutureResultI8
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U16
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U16
-typedef struct UniffiForeignFutureStructU16 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U16
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U16
+typedef struct UniffiForeignFutureResultU16 {
     uint16_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU16;
+} UniffiForeignFutureResultU16;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U16
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U16
-typedef void (*UniffiForeignFutureCompleteU16)(uint64_t, UniffiForeignFutureStructU16
+typedef void (*UniffiForeignFutureCompleteU16)(uint64_t, UniffiForeignFutureResultU16
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I16
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I16
-typedef struct UniffiForeignFutureStructI16 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I16
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I16
+typedef struct UniffiForeignFutureResultI16 {
     int16_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI16;
+} UniffiForeignFutureResultI16;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I16
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I16
-typedef void (*UniffiForeignFutureCompleteI16)(uint64_t, UniffiForeignFutureStructI16
+typedef void (*UniffiForeignFutureCompleteI16)(uint64_t, UniffiForeignFutureResultI16
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U32
-typedef struct UniffiForeignFutureStructU32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U32
+typedef struct UniffiForeignFutureResultU32 {
     uint32_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU32;
+} UniffiForeignFutureResultU32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U32
-typedef void (*UniffiForeignFutureCompleteU32)(uint64_t, UniffiForeignFutureStructU32
+typedef void (*UniffiForeignFutureCompleteU32)(uint64_t, UniffiForeignFutureResultU32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I32
-typedef struct UniffiForeignFutureStructI32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I32
+typedef struct UniffiForeignFutureResultI32 {
     int32_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI32;
+} UniffiForeignFutureResultI32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I32
-typedef void (*UniffiForeignFutureCompleteI32)(uint64_t, UniffiForeignFutureStructI32
+typedef void (*UniffiForeignFutureCompleteI32)(uint64_t, UniffiForeignFutureResultI32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_U64
-typedef struct UniffiForeignFutureStructU64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_U64
+typedef struct UniffiForeignFutureResultU64 {
     uint64_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructU64;
+} UniffiForeignFutureResultU64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_U64
-typedef void (*UniffiForeignFutureCompleteU64)(uint64_t, UniffiForeignFutureStructU64
+typedef void (*UniffiForeignFutureCompleteU64)(uint64_t, UniffiForeignFutureResultU64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_I64
-typedef struct UniffiForeignFutureStructI64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_I64
+typedef struct UniffiForeignFutureResultI64 {
     int64_t returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructI64;
+} UniffiForeignFutureResultI64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_I64
-typedef void (*UniffiForeignFutureCompleteI64)(uint64_t, UniffiForeignFutureStructI64
+typedef void (*UniffiForeignFutureCompleteI64)(uint64_t, UniffiForeignFutureResultI64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F32
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F32
-typedef struct UniffiForeignFutureStructF32 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F32
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F32
+typedef struct UniffiForeignFutureResultF32 {
     float returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructF32;
+} UniffiForeignFutureResultF32;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F32
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F32
-typedef void (*UniffiForeignFutureCompleteF32)(uint64_t, UniffiForeignFutureStructF32
+typedef void (*UniffiForeignFutureCompleteF32)(uint64_t, UniffiForeignFutureResultF32
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F64
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_F64
-typedef struct UniffiForeignFutureStructF64 {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F64
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_F64
+typedef struct UniffiForeignFutureResultF64 {
     double returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructF64;
+} UniffiForeignFutureResultF64;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F64
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_F64
-typedef void (*UniffiForeignFutureCompleteF64)(uint64_t, UniffiForeignFutureStructF64
+typedef void (*UniffiForeignFutureCompleteF64)(uint64_t, UniffiForeignFutureResultF64
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_POINTER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_POINTER
-typedef struct UniffiForeignFutureStructPointer {
-    void*_Nonnull returnValue;
-    RustCallStatus callStatus;
-} UniffiForeignFutureStructPointer;
-
-#endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_POINTER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_POINTER
-typedef void (*UniffiForeignFutureCompletePointer)(uint64_t, UniffiForeignFutureStructPointer
-    );
-
-#endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_RUST_BUFFER
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_RUST_BUFFER
-typedef struct UniffiForeignFutureStructRustBuffer {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_RUST_BUFFER
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_RUST_BUFFER
+typedef struct UniffiForeignFutureResultRustBuffer {
     RustBuffer returnValue;
     RustCallStatus callStatus;
-} UniffiForeignFutureStructRustBuffer;
+} UniffiForeignFutureResultRustBuffer;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_RUST_BUFFER
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_RUST_BUFFER
-typedef void (*UniffiForeignFutureCompleteRustBuffer)(uint64_t, UniffiForeignFutureStructRustBuffer
+typedef void (*UniffiForeignFutureCompleteRustBuffer)(uint64_t, UniffiForeignFutureResultRustBuffer
     );
 
 #endif
-#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_VOID
-#define UNIFFI_FFIDEF_FOREIGN_FUTURE_STRUCT_VOID
-typedef struct UniffiForeignFutureStructVoid {
+#ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_VOID
+#define UNIFFI_FFIDEF_FOREIGN_FUTURE_RESULT_VOID
+typedef struct UniffiForeignFutureResultVoid {
     RustCallStatus callStatus;
-} UniffiForeignFutureStructVoid;
+} UniffiForeignFutureResultVoid;
 
 #endif
 #ifndef UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_VOID
 #define UNIFFI_FFIDEF_FOREIGN_FUTURE_COMPLETE_VOID
-typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStructVoid
+typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureResultVoid
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_CLONE_HOPNODE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_CLONE_HOPNODE
-void*_Nonnull uniffi_hop_fn_clone_hopnode(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_hop_fn_clone_hopnode(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_FREE_HOPNODE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_FREE_HOPNODE
-void uniffi_hop_fn_free_hopnode(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_free_hopnode(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_NEW
-void*_Nonnull uniffi_hop_fn_constructor_hopnode_new(RustCallStatus *_Nonnull out_status
-    
+uint64_t uniffi_hop_fn_constructor_hopnode_new(RustCallStatus *_Nonnull out_status
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_OPEN
-void*_Nonnull uniffi_hop_fn_constructor_hopnode_open(RustBuffer db_path, RustBuffer secret, RustBuffer app_secret, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_hop_fn_constructor_hopnode_open(RustBuffer db_path, RustBuffer secret, RustBuffer app_secret, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_OPEN_KEYED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_OPEN_KEYED
-void*_Nonnull uniffi_hop_fn_constructor_hopnode_open_keyed(RustBuffer db_path, RustBuffer secret, RustBuffer app_secret, RustBuffer key, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_hop_fn_constructor_hopnode_open_keyed(RustBuffer db_path, RustBuffer secret, RustBuffer app_secret, RustBuffer key, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_WITH_SECRET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_CONSTRUCTOR_HOPNODE_WITH_SECRET
-void*_Nonnull uniffi_hop_fn_constructor_hopnode_with_secret(RustBuffer secret, RustCallStatus *_Nonnull out_status
+uint64_t uniffi_hop_fn_constructor_hopnode_with_secret(RustBuffer secret, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_HPS_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_HPS_MESSAGE
+int8_t uniffi_hop_fn_method_hopnode_accept_hps_message(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_HTTP_RESPONSE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_HTTP_RESPONSE
+int8_t uniffi_hop_fn_method_hopnode_accept_http_response(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_INBOX
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_INBOX
+int8_t uniffi_hop_fn_method_hopnode_accept_inbox(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_SERVICE_RESPONSE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ACCEPT_SERVICE_RESPONSE
+int8_t uniffi_hop_fn_method_hopnode_accept_service_response(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_ADDRESS
-RustBuffer uniffi_hop_fn_method_hopnode_address(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_address(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_BROWSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_BROWSE
-RustBuffer uniffi_hop_fn_method_hopnode_browse(void*_Nonnull ptr, RustBuffer service, RustBuffer tag, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_browse(uint64_t ptr, RustBuffer service, RustBuffer tag, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_BROWSE_DISCOVERABLE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_BROWSE_DISCOVERABLE
-RustBuffer uniffi_hop_fn_method_hopnode_browse_discoverable(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_browse_discoverable(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_CLEAR_QUEUE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_CLEAR_QUEUE
-void uniffi_hop_fn_method_hopnode_clear_queue(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_clear_queue(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_CONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_CONNECTED
-void uniffi_hop_fn_method_hopnode_connected(void*_Nonnull ptr, uint64_t link, int8_t initiator, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_connected(uint64_t ptr, uint64_t link, int8_t initiator, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_DISCONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_DISCONNECTED
-void uniffi_hop_fn_method_hopnode_disconnected(void*_Nonnull ptr, uint64_t link, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_disconnected(uint64_t ptr, uint64_t link, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_DRAIN_OUTGOING
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_DRAIN_OUTGOING
-RustBuffer uniffi_hop_fn_method_hopnode_drain_outgoing(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_drain_outgoing(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HNS_CACHE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HNS_CACHE
-RustBuffer uniffi_hop_fn_method_hopnode_hns_cache(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hns_cache(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_ACCEPT_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_ACCEPT_INVITE
-RustBuffer uniffi_hop_fn_method_hopnode_hps_accept_invite(void*_Nonnull ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_accept_invite(uint64_t ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_APPROVE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_APPROVE
-RustBuffer uniffi_hop_fn_method_hopnode_hps_approve(void*_Nonnull ptr, RustBuffer path, RustBuffer requester, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_approve(uint64_t ptr, RustBuffer path, RustBuffer requester, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_DECLINE_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_DECLINE_INVITE
-void uniffi_hop_fn_method_hopnode_hps_decline_invite(void*_Nonnull ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_hps_decline_invite(uint64_t ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_DENY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_DENY
-void uniffi_hop_fn_method_hopnode_hps_deny(void*_Nonnull ptr, RustBuffer path, RustBuffer requester, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_hps_deny(uint64_t ptr, RustBuffer path, RustBuffer requester, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_INVITE
-RustBuffer uniffi_hop_fn_method_hopnode_hps_invite(void*_Nonnull ptr, RustBuffer path, RustBuffer dest, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_invite(uint64_t ptr, RustBuffer path, RustBuffer dest, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_LEAVE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_LEAVE
-RustBuffer uniffi_hop_fn_method_hopnode_hps_leave(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_leave(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_MEMBERS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_MEMBERS
-RustBuffer uniffi_hop_fn_method_hopnode_hps_members(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_members(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_MY_TOPICS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_MY_TOPICS
-RustBuffer uniffi_hop_fn_method_hopnode_hps_my_topics(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_my_topics(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_PENDING
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_PENDING
-RustBuffer uniffi_hop_fn_method_hopnode_hps_pending(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_pending(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_PUBLISH
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_PUBLISH
-RustBuffer uniffi_hop_fn_method_hopnode_hps_publish(void*_Nonnull ptr, RustBuffer path, RustBuffer body, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_publish(uint64_t ptr, RustBuffer path, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_REACH
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_REACH
-uint32_t uniffi_hop_fn_method_hopnode_hps_reach(void*_Nonnull ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
+uint32_t uniffi_hop_fn_method_hopnode_hps_reach(uint64_t ptr, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_REKEY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_REKEY
-RustBuffer uniffi_hop_fn_method_hopnode_hps_rekey(void*_Nonnull ptr, RustBuffer path, RustBuffer new_path, RustBuffer remove, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_rekey(uint64_t ptr, RustBuffer path, RustBuffer new_path, RustBuffer remove, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_HPS_SUBSCRIBE
-RustBuffer uniffi_hop_fn_method_hopnode_hps_subscribe(void*_Nonnull ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_hps_subscribe(uint64_t ptr, RustBuffer host, RustBuffer path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_INTERNET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_INTERNET
-int8_t uniffi_hop_fn_method_hopnode_is_internet(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_hop_fn_method_hopnode_is_internet(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_PERSISTENT
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_PERSISTENT
-int8_t uniffi_hop_fn_method_hopnode_is_persistent(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+int8_t uniffi_hop_fn_method_hopnode_is_persistent(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_SECURED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_IS_SECURED
-int8_t uniffi_hop_fn_method_hopnode_is_secured(void*_Nonnull ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
+int8_t uniffi_hop_fn_method_hopnode_is_secured(uint64_t ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_KNOWS_ROUTE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_KNOWS_ROUTE
-int8_t uniffi_hop_fn_method_hopnode_knows_route(void*_Nonnull ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
+int8_t uniffi_hop_fn_method_hopnode_knows_route(uint64_t ptr, RustBuffer address, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_MESSAGE_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_MESSAGE_STATUS
-RustBuffer uniffi_hop_fn_method_hopnode_message_status(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_message_status(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_NAME
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_NAME
-RustBuffer uniffi_hop_fn_method_hopnode_name(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_name(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PEER_LINKS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PEER_LINKS
-RustBuffer uniffi_hop_fn_method_hopnode_peer_links(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_peer_links(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PEERS
-RustBuffer uniffi_hop_fn_method_hopnode_peers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_peers(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PENDING_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PENDING_COUNT
-uint32_t uniffi_hop_fn_method_hopnode_pending_count(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint32_t uniffi_hop_fn_method_hopnode_pending_count(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PROVIDE_DNS_PROOF
-#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PROVIDE_DNS_PROOF
-void uniffi_hop_fn_method_hopnode_provide_dns_proof(void*_Nonnull ptr, RustBuffer domain, RustBuffer bodies, RustCallStatus *_Nonnull out_status
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PROVIDE_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PROVIDE_REACH_RECORD
+void uniffi_hop_fn_method_hopnode_provide_reach_record(uint64_t ptr, RustBuffer domain, RustBuffer record, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PUBLISH_PREKEY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PUBLISH_PREKEY
-RustBuffer uniffi_hop_fn_method_hopnode_publish_prekey(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_publish_prekey(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PUBLISH_SERVICE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_PUBLISH_SERVICE
-RustBuffer uniffi_hop_fn_method_hopnode_publish_service(void*_Nonnull ptr, RustBuffer service, RustBuffer title, RustBuffer summary, RustBuffer tags, uint32_t ttl_ms, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_publish_service(uint64_t ptr, RustBuffer service, RustBuffer title, RustBuffer summary, RustBuffer tags, uint32_t ttl_ms, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_QUEUE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_QUEUE
-RustBuffer uniffi_hop_fn_method_hopnode_queue(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_queue(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RECEIVED
-void uniffi_hop_fn_method_hopnode_received(void*_Nonnull ptr, uint64_t link, RustBuffer bytes, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_received(uint64_t ptr, uint64_t link, RustBuffer bytes, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_REGISTER_SERVICE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_REGISTER_SERVICE
-RustBuffer uniffi_hop_fn_method_hopnode_register_service(void*_Nonnull ptr, RustBuffer path, RustBuffer kind, RustBuffer access, RustBuffer visibility, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_register_service(uint64_t ptr, RustBuffer path, RustBuffer kind, RustBuffer access, RustBuffer visibility, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_REHYDRATE_DROPPED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_REHYDRATE_DROPPED
-uint32_t uniffi_hop_fn_method_hopnode_rehydrate_dropped(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+uint32_t uniffi_hop_fn_method_hopnode_rehydrate_dropped(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RESOLVE_HNS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RESOLVE_HNS
-RustBuffer uniffi_hop_fn_method_hopnode_resolve_hns(void*_Nonnull ptr, RustBuffer domain, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RESOLVE_HNS_VIA
-#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_RESOLVE_HNS_VIA
-RustBuffer uniffi_hop_fn_method_hopnode_resolve_hns_via(void*_Nonnull ptr, RustBuffer resolver, RustBuffer domain, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_resolve_hns(uint64_t ptr, RustBuffer domain, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SECRET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SECRET
-RustBuffer uniffi_hop_fn_method_hopnode_secret(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_secret(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_HOPS_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_HOPS_REQUEST
-RustBuffer uniffi_hop_fn_method_hopnode_send_hops_request(void*_Nonnull ptr, RustBuffer endpoint, RustBuffer host, RustBuffer method, RustBuffer url, RustBuffer body, uint32_t max_resp, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_hops_request(uint64_t ptr, RustBuffer endpoint, RustBuffer host, RustBuffer method, RustBuffer url, RustBuffer body, uint32_t max_resp, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_HTTP_RESPONSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_HTTP_RESPONSE
-void uniffi_hop_fn_method_hopnode_send_http_response(void*_Nonnull ptr, RustBuffer to, RustBuffer for_request_id, uint16_t status, RustBuffer body, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_send_http_response(uint64_t ptr, RustBuffer to, RustBuffer for_request_id, uint16_t status, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_MESSAGE
-RustBuffer uniffi_hop_fn_method_hopnode_send_message(void*_Nonnull ptr, RustBuffer dst, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_message(uint64_t ptr, RustBuffer dst, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_MESSAGE_TRACED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_MESSAGE_TRACED
-RustBuffer uniffi_hop_fn_method_hopnode_send_message_traced(void*_Nonnull ptr, RustBuffer dst, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_message_traced(uint64_t ptr, RustBuffer dst, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_SERVICE_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_SERVICE_REQUEST
-RustBuffer uniffi_hop_fn_method_hopnode_send_service_request(void*_Nonnull ptr, RustBuffer dst, RustBuffer service, RustBuffer method, RustBuffer args, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_service_request(uint64_t ptr, RustBuffer dst, RustBuffer service, RustBuffer method, RustBuffer args, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_SERVICE_RESPONSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_SERVICE_RESPONSE
-RustBuffer uniffi_hop_fn_method_hopnode_send_service_response(void*_Nonnull ptr, RustBuffer to, RustBuffer for_request_id, uint16_t status, RustBuffer body, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_service_response(uint64_t ptr, RustBuffer to, RustBuffer for_request_id, uint16_t status, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_TO
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SEND_TO
-RustBuffer uniffi_hop_fn_method_hopnode_send_to(void*_Nonnull ptr, RustBuffer address, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_send_to(uint64_t ptr, RustBuffer address, RustBuffer content_type, RustBuffer body, int8_t request_ack, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SET_INTERNET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SET_INTERNET
-void uniffi_hop_fn_method_hopnode_set_internet(void*_Nonnull ptr, int8_t on, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_set_internet(uint64_t ptr, int8_t on, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SET_NAME
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SET_NAME
-void uniffi_hop_fn_method_hopnode_set_name(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_set_name(uint64_t ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SIGN_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SIGN_REACH_RECORD
+RustBuffer uniffi_hop_fn_method_hopnode_sign_reach_record(uint64_t ptr, RustBuffer endpoint, uint32_t ttl_secs, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_SUBSCRIBE
-void uniffi_hop_fn_method_hopnode_subscribe(void*_Nonnull ptr, RustBuffer topic, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_subscribe(uint64_t ptr, RustBuffer topic, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_DNS_LOOKUPS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_DNS_LOOKUPS
-RustBuffer uniffi_hop_fn_method_hopnode_take_dns_lookups(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_dns_lookups(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HNS_RESULTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HNS_RESULTS
-RustBuffer uniffi_hop_fn_method_hopnode_take_hns_results(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_hns_results(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HPS_INVITES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HPS_INVITES
-RustBuffer uniffi_hop_fn_method_hopnode_take_hps_invites(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_hps_invites(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HPS_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HPS_MESSAGES
-RustBuffer uniffi_hop_fn_method_hopnode_take_hps_messages(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_hps_messages(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HTTP_REQUESTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HTTP_REQUESTS
-RustBuffer uniffi_hop_fn_method_hopnode_take_http_requests(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_http_requests(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HTTP_RESPONSES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_HTTP_RESPONSES
-RustBuffer uniffi_hop_fn_method_hopnode_take_http_responses(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_http_responses(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_INBOX
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_INBOX
-RustBuffer uniffi_hop_fn_method_hopnode_take_inbox(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_inbox(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_SERVICE_REQUESTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_SERVICE_REQUESTS
-RustBuffer uniffi_hop_fn_method_hopnode_take_service_requests(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_service_requests(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_SERVICE_RESPONSES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TAKE_SERVICE_RESPONSES
-RustBuffer uniffi_hop_fn_method_hopnode_take_service_responses(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_hop_fn_method_hopnode_take_service_responses(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TICK
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_METHOD_HOPNODE_TICK
-void uniffi_hop_fn_method_hopnode_tick(void*_Nonnull ptr, uint64_t now_ms, RustCallStatus *_Nonnull out_status
+void uniffi_hop_fn_method_hopnode_tick(uint64_t ptr, uint64_t now_ms, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_ADDRESS_BASE58
@@ -600,12 +612,17 @@ RustBuffer uniffi_hop_fn_func_decode_identity(RustBuffer body, RustCallStatus *_
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_SERVICE_IDENTIFY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_SERVICE_IDENTIFY
 RustBuffer uniffi_hop_fn_func_service_identify(RustCallStatus *_Nonnull out_status
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_SHORT_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_SHORT_ADDRESS
 RustBuffer uniffi_hop_fn_func_short_address(RustBuffer address, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_VERIFY_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_FN_FUNC_VERIFY_REACH_RECORD
+RustBuffer uniffi_hop_fn_func_verify_reach_record(RustBuffer bytes, uint64_t now_secs, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_HOP_RUSTBUFFER_ALLOC
@@ -828,26 +845,6 @@ void ffi_hop_rust_future_free_f64(uint64_t handle
 double ffi_hop_rust_future_complete_f64(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_POLL_POINTER
-#define UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_POLL_POINTER
-void ffi_hop_rust_future_poll_pointer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_CANCEL_POINTER
-#define UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_CANCEL_POINTER
-void ffi_hop_rust_future_cancel_pointer(uint64_t handle
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_FREE_POINTER
-#define UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_FREE_POINTER
-void ffi_hop_rust_future_free_pointer(uint64_t handle
-);
-#endif
-#ifndef UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_COMPLETE_POINTER
-#define UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_COMPLETE_POINTER
-void*_Nonnull ffi_hop_rust_future_complete_pointer(uint64_t handle, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_POLL_RUST_BUFFER
 #define UNIFFI_FFIDEF_FFI_HOP_RUST_FUTURE_POLL_RUST_BUFFER
 void ffi_hop_rust_future_poll_rust_buffer(uint64_t handle, UniffiRustFutureContinuationCallback _Nonnull callback, uint64_t callback_data
@@ -891,421 +888,451 @@ void ffi_hop_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_ADDRESS_BASE58
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_ADDRESS_BASE58
 uint16_t uniffi_hop_checksum_func_address_base58(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_ADDRESS_FROM_BASE58
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_ADDRESS_FROM_BASE58
 uint16_t uniffi_hop_checksum_func_address_from_base58(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_DECODE_IDENTITY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_DECODE_IDENTITY
 uint16_t uniffi_hop_checksum_func_decode_identity(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_SERVICE_IDENTIFY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_SERVICE_IDENTIFY
 uint16_t uniffi_hop_checksum_func_service_identify(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_SHORT_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_SHORT_ADDRESS
 uint16_t uniffi_hop_checksum_func_short_address(void
-    
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_VERIFY_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_FUNC_VERIFY_REACH_RECORD
+uint16_t uniffi_hop_checksum_func_verify_reach_record(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_HPS_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_HPS_MESSAGE
+uint16_t uniffi_hop_checksum_method_hopnode_accept_hps_message(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_HTTP_RESPONSE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_HTTP_RESPONSE
+uint16_t uniffi_hop_checksum_method_hopnode_accept_http_response(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_INBOX
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_INBOX
+uint16_t uniffi_hop_checksum_method_hopnode_accept_inbox(void
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_SERVICE_RESPONSE
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ACCEPT_SERVICE_RESPONSE
+uint16_t uniffi_hop_checksum_method_hopnode_accept_service_response(void
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ADDRESS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_ADDRESS
 uint16_t uniffi_hop_checksum_method_hopnode_address(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_BROWSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_BROWSE
 uint16_t uniffi_hop_checksum_method_hopnode_browse(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_BROWSE_DISCOVERABLE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_BROWSE_DISCOVERABLE
 uint16_t uniffi_hop_checksum_method_hopnode_browse_discoverable(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_CLEAR_QUEUE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_CLEAR_QUEUE
 uint16_t uniffi_hop_checksum_method_hopnode_clear_queue(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_CONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_CONNECTED
 uint16_t uniffi_hop_checksum_method_hopnode_connected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_DISCONNECTED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_DISCONNECTED
 uint16_t uniffi_hop_checksum_method_hopnode_disconnected(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_DRAIN_OUTGOING
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_DRAIN_OUTGOING
 uint16_t uniffi_hop_checksum_method_hopnode_drain_outgoing(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HNS_CACHE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HNS_CACHE
 uint16_t uniffi_hop_checksum_method_hopnode_hns_cache(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_ACCEPT_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_ACCEPT_INVITE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_accept_invite(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_APPROVE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_APPROVE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_approve(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_DECLINE_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_DECLINE_INVITE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_decline_invite(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_DENY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_DENY
 uint16_t uniffi_hop_checksum_method_hopnode_hps_deny(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_INVITE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_INVITE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_invite(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_LEAVE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_LEAVE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_leave(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_MEMBERS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_MEMBERS
 uint16_t uniffi_hop_checksum_method_hopnode_hps_members(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_MY_TOPICS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_MY_TOPICS
 uint16_t uniffi_hop_checksum_method_hopnode_hps_my_topics(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_PENDING
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_PENDING
 uint16_t uniffi_hop_checksum_method_hopnode_hps_pending(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_PUBLISH
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_PUBLISH
 uint16_t uniffi_hop_checksum_method_hopnode_hps_publish(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_REACH
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_REACH
 uint16_t uniffi_hop_checksum_method_hopnode_hps_reach(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_REKEY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_REKEY
 uint16_t uniffi_hop_checksum_method_hopnode_hps_rekey(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_HPS_SUBSCRIBE
 uint16_t uniffi_hop_checksum_method_hopnode_hps_subscribe(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_INTERNET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_INTERNET
 uint16_t uniffi_hop_checksum_method_hopnode_is_internet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_PERSISTENT
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_PERSISTENT
 uint16_t uniffi_hop_checksum_method_hopnode_is_persistent(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_SECURED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_IS_SECURED
 uint16_t uniffi_hop_checksum_method_hopnode_is_secured(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_KNOWS_ROUTE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_KNOWS_ROUTE
 uint16_t uniffi_hop_checksum_method_hopnode_knows_route(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_MESSAGE_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_MESSAGE_STATUS
 uint16_t uniffi_hop_checksum_method_hopnode_message_status(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_NAME
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_NAME
 uint16_t uniffi_hop_checksum_method_hopnode_name(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PEER_LINKS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PEER_LINKS
 uint16_t uniffi_hop_checksum_method_hopnode_peer_links(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PEERS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PEERS
 uint16_t uniffi_hop_checksum_method_hopnode_peers(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PENDING_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PENDING_COUNT
 uint16_t uniffi_hop_checksum_method_hopnode_pending_count(void
-    
+
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PROVIDE_DNS_PROOF
-#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PROVIDE_DNS_PROOF
-uint16_t uniffi_hop_checksum_method_hopnode_provide_dns_proof(void
-    
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PROVIDE_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PROVIDE_REACH_RECORD
+uint16_t uniffi_hop_checksum_method_hopnode_provide_reach_record(void
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PUBLISH_PREKEY
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PUBLISH_PREKEY
 uint16_t uniffi_hop_checksum_method_hopnode_publish_prekey(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PUBLISH_SERVICE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_PUBLISH_SERVICE
 uint16_t uniffi_hop_checksum_method_hopnode_publish_service(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_QUEUE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_QUEUE
 uint16_t uniffi_hop_checksum_method_hopnode_queue(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RECEIVED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RECEIVED
 uint16_t uniffi_hop_checksum_method_hopnode_received(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_REGISTER_SERVICE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_REGISTER_SERVICE
 uint16_t uniffi_hop_checksum_method_hopnode_register_service(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_REHYDRATE_DROPPED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_REHYDRATE_DROPPED
 uint16_t uniffi_hop_checksum_method_hopnode_rehydrate_dropped(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RESOLVE_HNS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RESOLVE_HNS
 uint16_t uniffi_hop_checksum_method_hopnode_resolve_hns(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RESOLVE_HNS_VIA
-#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_RESOLVE_HNS_VIA
-uint16_t uniffi_hop_checksum_method_hopnode_resolve_hns_via(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SECRET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SECRET
 uint16_t uniffi_hop_checksum_method_hopnode_secret(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_HOPS_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_HOPS_REQUEST
 uint16_t uniffi_hop_checksum_method_hopnode_send_hops_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_HTTP_RESPONSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_HTTP_RESPONSE
 uint16_t uniffi_hop_checksum_method_hopnode_send_http_response(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_MESSAGE
 uint16_t uniffi_hop_checksum_method_hopnode_send_message(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_MESSAGE_TRACED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_MESSAGE_TRACED
 uint16_t uniffi_hop_checksum_method_hopnode_send_message_traced(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_SERVICE_REQUEST
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_SERVICE_REQUEST
 uint16_t uniffi_hop_checksum_method_hopnode_send_service_request(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_SERVICE_RESPONSE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_SERVICE_RESPONSE
 uint16_t uniffi_hop_checksum_method_hopnode_send_service_response(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_TO
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SEND_TO
 uint16_t uniffi_hop_checksum_method_hopnode_send_to(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SET_INTERNET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SET_INTERNET
 uint16_t uniffi_hop_checksum_method_hopnode_set_internet(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SET_NAME
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SET_NAME
 uint16_t uniffi_hop_checksum_method_hopnode_set_name(void
-    
+
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SIGN_REACH_RECORD
+#define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SIGN_REACH_RECORD
+uint16_t uniffi_hop_checksum_method_hopnode_sign_reach_record(void
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_SUBSCRIBE
 uint16_t uniffi_hop_checksum_method_hopnode_subscribe(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_DNS_LOOKUPS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_DNS_LOOKUPS
 uint16_t uniffi_hop_checksum_method_hopnode_take_dns_lookups(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HNS_RESULTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HNS_RESULTS
 uint16_t uniffi_hop_checksum_method_hopnode_take_hns_results(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HPS_INVITES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HPS_INVITES
 uint16_t uniffi_hop_checksum_method_hopnode_take_hps_invites(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HPS_MESSAGES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HPS_MESSAGES
 uint16_t uniffi_hop_checksum_method_hopnode_take_hps_messages(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HTTP_REQUESTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HTTP_REQUESTS
 uint16_t uniffi_hop_checksum_method_hopnode_take_http_requests(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HTTP_RESPONSES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_HTTP_RESPONSES
 uint16_t uniffi_hop_checksum_method_hopnode_take_http_responses(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_INBOX
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_INBOX
 uint16_t uniffi_hop_checksum_method_hopnode_take_inbox(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_SERVICE_REQUESTS
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_SERVICE_REQUESTS
 uint16_t uniffi_hop_checksum_method_hopnode_take_service_requests(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_SERVICE_RESPONSES
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TAKE_SERVICE_RESPONSES
 uint16_t uniffi_hop_checksum_method_hopnode_take_service_responses(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TICK
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_METHOD_HOPNODE_TICK
 uint16_t uniffi_hop_checksum_method_hopnode_tick(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_NEW
 uint16_t uniffi_hop_checksum_constructor_hopnode_new(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_OPEN
 uint16_t uniffi_hop_checksum_constructor_hopnode_open(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_OPEN_KEYED
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_OPEN_KEYED
 uint16_t uniffi_hop_checksum_constructor_hopnode_open_keyed(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_WITH_SECRET
 #define UNIFFI_FFIDEF_UNIFFI_HOP_CHECKSUM_CONSTRUCTOR_HOPNODE_WITH_SECRET
 uint16_t uniffi_hop_checksum_constructor_hopnode_with_secret(void
-    
+
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_HOP_UNIFFI_CONTRACT_VERSION
 #define UNIFFI_FFIDEF_FFI_HOP_UNIFFI_CONTRACT_VERSION
 uint32_t ffi_hop_uniffi_contract_version(void
-    
+
 );
 #endif
 

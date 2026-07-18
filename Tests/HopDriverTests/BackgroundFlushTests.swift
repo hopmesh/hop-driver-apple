@@ -1,9 +1,7 @@
-// apple-r3-01: a message received during a short/locked BACKGROUND wake is drained out of the node inbox
-// (destructive takeInbox) into the in-memory `messages` array, but the messages.json mirror write is
-// DEBOUNCED by 1s (scheduleMessageSave). If iOS suspends/kills the app inside that 1s window the message
-// is gone from the node inbox yet never reached the mirror, so it vanishes from chat history on relaunch.
-// The fix is a synchronous `flushPendingSaves()` (cancels the debounce, writes NOW), called at the end of
-// a background pump (backgroundTick -> pump(flushAfter:true)) and on scenePhase==.background.
+// apple-r3-01: local message/channel mutations use a 1s save debounce. A short background transition can
+// suspend the app before that write. `flushPendingSaves()` cancels the debounce and writes immediately at
+// the end of a background pump and on scenePhase==.background. Inbound messages now have a stronger path:
+// their history mirror is persisted before explicit core inbox acceptance.
 //
 // This test drives that seam with a real (headless) HopNode against a temp db: it appends a message (which
 // schedules the 1s debounce but does NOT write yet), proves the mirror is not on disk, then calls
@@ -19,7 +17,7 @@ final class BackgroundFlushTests: XCTestCase {
     private func makeBearer() -> HopBearer {
         let db = FileManager.default.temporaryDirectory
             .appendingPathComponent("hop-flush-\(UUID().uuidString).db").path
-        return HopBearer(config: .init(
+        let bearer = HopBearer(config: .init(
             dbPath: db,
             deviceSeed: Data(repeating: 0x11, count: 32),
             appSecret: Data(repeating: 0x48, count: 32),
@@ -27,6 +25,8 @@ final class BackgroundFlushTests: XCTestCase {
             defaultRelay: nil,
             role: .full,
             dbKey: Data()))   // plain store (no SQLCipher key) for the headless test
+        addTeardownBlock { bearer.shutdownForTesting() }
+        return bearer
     }
 
     /// Clear the shared mirror so this test isn't reading a leftover from a prior run / real use.
@@ -74,5 +74,23 @@ final class BackgroundFlushTests: XCTestCase {
         bearer.flushPendingSaves()
         XCTAssertFalse(FileManager.default.fileExists(atPath: HopBearer.messagesFileURL.path),
                        "flush with no pending save must not write a mirror")
+    }
+
+    func testShutdownDiscardsPendingMirrorWrite() {
+        clearMirror()
+        defer { clearMirror() }
+        let bearer = makeBearer()
+        bearer.messages.append(HopBearer.Message(peer: "peerX", text: "stale", incoming: true))
+        bearer.core.async {
+            DispatchQueue.main.async {
+                bearer.messages.append(HopBearer.Message(peer: "peerY", text: "later", incoming: true))
+            }
+        }
+
+        bearer.shutdownForTesting()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.1))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: HopBearer.messagesFileURL.path),
+                       "a released test bearer must not overwrite the next test's mirror")
     }
 }

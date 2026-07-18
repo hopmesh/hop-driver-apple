@@ -166,10 +166,17 @@ extension HopBearer {
 
     /// Leave / unsubscribe a topic we follow.
     public func hpsLeave(_ topic: HpsTopic) {
+        var retainedThreads = hpsThreads
+        retainedThreads[topic.id] = nil
+        guard MirrorStore.saveChannels(retainedThreads) else {
+            persistenceError = "failed to persist channel deletion"
+            return
+        }
+        durableHpsIds.replace(with: retainedThreads.values.flatMap { $0 }.compactMap(\.inboxId))
         let path = topic.path
         core.async { [weak self] in _ = try? self?.node.hpsLeave(path: path) }
         hpsTopics.removeAll { $0.id == topic.id }
-        hpsThreads[topic.id] = nil
+        hpsThreads = retainedThreads
         hpsUnread[topic.id] = nil
         pump()
     }
@@ -209,21 +216,74 @@ extension HopBearer {
     public func openTopic(_ id: String) { activeTopic = id; hpsUnread[id] = 0 }
     public func closeTopic() { activeTopic = nil }
 
-    private func appendThread(_ id: String, _ row: HpsMsgRow) {
+    @discardableResult
+    private func appendThread(_ id: String, _ row: HpsMsgRow) -> Bool {
+        guard hpsThreads[id] != nil || hpsThreads.count < RetentionPolicy.defaults.conversations else {
+            return false
+        }
         hpsThreads[id, default: []].append(row)
-        if hpsThreads[id]!.count > 500 { hpsThreads[id]!.removeFirst(hpsThreads[id]!.count - 500) }
+        while let thread = hpsThreads[id],
+              thread.count > RetentionPolicy.defaults.conversationMessages ||
+                thread.reduce(0, { $0 + Data($1.text.utf8).count }) > RetentionPolicy.defaults.conversationMessageBytes {
+            hpsThreads[id]!.removeFirst()
+        }
+        while hpsThreads.values.reduce(0, { $0 + $1.count }) > RetentionPolicy.defaults.globalMessages ||
+                hpsThreads.values.flatMap({ $0 }).reduce(0, { $0 + Data($1.text.utf8).count }) >
+                    RetentionPolicy.defaults.globalMessageBytes {
+            var candidates: [(String, HpsMsgRow)] = []
+            for (key, rows) in hpsThreads { candidates.append(contentsOf: rows.map { (key, $0) }) }
+            guard let oldest = candidates.min(by: {
+                $0.1.at == $1.1.at ? $0.0 < $1.0 : $0.1.at < $1.1.at
+            }),
+                  let index = hpsThreads[oldest.0]?.firstIndex(where: { $0.id == oldest.1.id }) else { break }
+            hpsThreads[oldest.0]!.remove(at: index)
+        }
+        return hpsThreads[id]?.contains(where: { $0.id == row.id }) == true
     }
 
     /// Apply received pub/sub messages into per-topic threads (main).
     func applyHpsMessages(_ msgs: [HpsMessage]) {
+        var accepted: [Data] = []
+        var journalChanged = false
         for m in msgs {
+            let duplicate = durableHpsIds.contains(m.id) || hpsThreads.values
+                .flatMap { $0 }
+                .contains { $0.inboxId == m.id }
+            if duplicate {
+                accepted.append(m.id)
+                continue
+            }
             let text = String(data: m.body, encoding: .utf8) ?? "<\(m.body.count) bytes>"
             // Match the message to a topic we follow (by path; host is whoever we subscribed to).
             let topic = hpsTopics.first { $0.path == m.path }
             let id = topic?.id ?? m.path
-            appendThread(id, HpsMsgRow(path: m.path, sender: m.sender, text: text, at: HopBearer.nowMs()))
-            if id != activeTopic { hpsUnread[id, default: 0] += 1 }
-            queueIdentify(m.sender)
+            let keep = Data(text.utf8).count <= RetentionPolicy.defaults.conversationMessageBytes &&
+                (hpsThreads[id] != nil || hpsThreads.count < RetentionPolicy.defaults.conversations)
+            let row = HpsMsgRow(path: m.path, sender: m.sender, text: text,
+                                at: HopBearer.nowMs(), inboxId: m.id)
+            let persisted = persistHpsForTest?(m.id, id, keep ? row : nil) ??
+                MirrorStore.appendChannelDelta(id: m.id, topic: id, row: keep ? row : nil)
+            guard persisted else {
+                persistenceError = "failed to append channel journal"
+                continue
+            }
+            durableHpsIds.insert(m.id)
+            journalChanged = true
+            if keep, appendThread(id, row) {
+                if id != activeTopic { hpsUnread[id, default: 0] += 1 }
+                queueIdentify(m.sender)
+            }
+            accepted.append(m.id)
+        }
+        if journalChanged { scheduleChannelJournalCompaction() }
+        if !accepted.isEmpty {
+            core.async { [weak self] in
+                guard let self else { return }
+                for id in accepted {
+                    if let acceptHpsForTest = self.acceptHpsForTest { _ = acceptHpsForTest(id) }
+                    else { _ = try? self.node.acceptHpsMessage(id: id) }
+                }
+            }
         }
     }
 

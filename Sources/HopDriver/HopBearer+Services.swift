@@ -58,6 +58,7 @@ extension HopBearer {
     /// address book (names + relay domains); custom requests get a "not implemented"
     /// reply so callers aren't left hanging (the demo registers no app services yet).
     func applyServiceResponses(_ responses: [ServiceResp]) {
+        var accepted: [Data] = []
         for resp in responses {
             if identifyReqs.remove(resp.forRequestId) != nil, resp.status == 0,
                let info = decodeIdentity(body: resp.body) {
@@ -79,6 +80,16 @@ extension HopBearer {
             } else {
                 let text = String(data: resp.body, encoding: .utf8) ?? "<\(resp.body.count) bytes>"
                 serviceLog.insert("service ← \(resp.status): \(text.prefix(120))", at: 0)
+            }
+            accepted.append(resp.id)
+        }
+        if !accepted.isEmpty {
+            core.async { [weak self] in
+                guard let self else { return }
+                for id in accepted {
+                    if let accept = self.acceptServiceResponseForTest { _ = accept(id) }
+                    else { _ = try? self.node.acceptServiceResponse(id: id) }
+                }
             }
         }
     }

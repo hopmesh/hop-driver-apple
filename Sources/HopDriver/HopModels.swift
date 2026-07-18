@@ -8,6 +8,8 @@ import HopFFIBindings
 // no behavior.
 extension HopBearer {
 
+    public enum SendResult: Equatable { case queued, invalid, overloaded }
+
     /// A discovered/known peer. Identity is the 32-byte address, NOT the name, so a rename (identify /
     /// presence update) does not churn SwiftUI list diffing / navigation.
     public struct Peer: Identifiable, Hashable {
@@ -30,6 +32,7 @@ extension HopBearer {
         public var imageData: Data? = nil  // raw bytes for a single-image message (content_type image/*)
         public var images: [Data] = []     // one or more images (a multipart/mixed message)
         public var bundleId: Data? = nil
+        public var inboxId: Data? = nil    // stable incoming id, persisted before core acceptance
         // Incoming metadata (shown under the bubble).
         public var hops: UInt8 = 0
         public var latencyMs: UInt64? = nil      // received time − sender's send time
@@ -78,11 +81,22 @@ extension HopBearer {
 
     /// One received hps:// message, decrypted + sender-verified (§32).
     public struct HpsMsgRow: Identifiable, Codable {
-        public var id = UUID()
+        public var id: UUID
         public let path: String
         public let sender: Data
         public let text: String
         public let at: UInt64
+        public let inboxId: Data?
+
+        public init(id: UUID = UUID(), path: String, sender: Data, text: String, at: UInt64,
+                    inboxId: Data? = nil) {
+            self.id = id
+            self.path = path
+            self.sender = sender
+            self.text = text
+            self.at = at
+            self.inboxId = inboxId
+        }
     }
 
     /// apple-10: a snapshot of a hosted topic's reach + pending join-requests + members, fetched OFF

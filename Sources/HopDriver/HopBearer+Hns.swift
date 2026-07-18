@@ -90,12 +90,18 @@ extension HopBearer {
     // Internal (not private) so the pure hops:// URL split (strip scheme, split domain/path, default the
     // path to "/") is unit-testable without a node or a live fetch.
     static func parseHops(_ raw: String) -> (domain: String, path: String) {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = s.range(of: "hops://") { s.removeSubrange(s.startIndex..<r.upperBound) }
-        guard let slash = s.firstIndex(of: "/") else { return (s, "/") }
-        let domain = String(s[s.startIndex..<slash])
-        let path = String(s[slash...])
-        return (domain, path.isEmpty ? "/" : path)
+        let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty, !input.contains("\\") else { return ("", "/") }
+        let absolute = input.contains("://") ? input : "hops://\(input)"
+        guard let components = URLComponents(string: absolute),
+              components.scheme?.lowercased() == "hops",
+              components.user == nil, components.password == nil, components.port == nil,
+              components.fragment == nil,
+              let rawHost = components.host,
+              let domain = canonicalHnsDomain(rawHost) else { return ("", "/") }
+        var path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
+        if let query = components.percentEncodedQuery, !query.isEmpty { path += "?\(query)" }
+        return (domain, path)
     }
 
     /// Drain finished HNS resolutions (firing any queued hops:// fetch) and hops:// HTTP
@@ -129,16 +135,29 @@ extension HopBearer {
     }
 
     func applyHttpResponses(_ responses: [HttpResp]) {
+        var accepted: [Data] = []
         for resp in responses {
             // WebView completion (per-resource) takes priority over the text box.
             if let completion = hopsWebReqs.removeValue(forKey: resp.forRequestId) {
                 completion(HopResponse(status: Int(resp.status),
                                        contentType: resp.contentType, body: resp.body))
+                accepted.append(resp.id)
                 continue
             }
-            guard let domain = hopsReqs.removeValue(forKey: resp.forRequestId) else { continue }
-            let text = String(data: resp.body, encoding: .utf8) ?? "<\(resp.body.count) bytes>"
-            hopsResults[domain] = "\(resp.status) · \(text)"
+            if let domain = hopsReqs.removeValue(forKey: resp.forRequestId) {
+                let text = String(data: resp.body, encoding: .utf8) ?? "<\(resp.body.count) bytes>"
+                hopsResults[domain] = "\(resp.status) · \(text)"
+            }
+            accepted.append(resp.id)
+        }
+        if !accepted.isEmpty {
+            core.async { [weak self] in
+                guard let self else { return }
+                for id in accepted {
+                    if let accept = self.acceptHttpResponseForTest { _ = accept(id) }
+                    else { _ = try? self.node.acceptHttpResponse(id: id) }
+                }
+            }
         }
     }
 
@@ -154,10 +173,49 @@ extension HopBearer {
     /// missing field / malformed JSON / bad base64. Pure (no network), so it's unit-testable apart from
     /// the URLSession GET in `fetchReachRecord` (which is excluded from the coverage denominator).
     static func reachRecord(fromWellKnown body: Data?) -> Data {
-        guard let body,
+        guard let body, body.count <= hnsMaxBodyBytes,
               let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let reach = obj["reach"] as? String,
-              let bytes = Data(base64Encoded: reach) else { return Data() }
+              let bytes = Data(base64Encoded: reach), bytes.count <= hnsMaxRecordBytes else { return Data() }
         return bytes
     }
+
+    static func canonicalReachRecordURL(domain: String) -> URL? {
+        guard let host = canonicalHnsDomain(domain) else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        components.percentEncodedPath = "/.well-known/hop"
+        guard components.user == nil, components.password == nil, components.port == nil,
+              let url = components.url else { return nil }
+        return url
+    }
+
+    static func validatedReachRecord(data: Data?, response: URLResponse?, expectedURL: URL) -> Data {
+        guard let http = response as? HTTPURLResponse,
+              http.url == expectedURL,
+              http.statusCode == 200,
+              http.mimeType?.lowercased() == "application/json",
+              http.allHeaderFields.reduce(0, { total, item in
+                  total + String(describing: item.key).utf8.count + String(describing: item.value).utf8.count + 4
+              }) <= hnsMaxHeaderBytes,
+              let data, data.count <= hnsMaxBodyBytes else { return Data() }
+        return reachRecord(fromWellKnown: data)
+    }
+
+    private static func canonicalHnsDomain(_ raw: String) -> String? {
+        let host = raw.lowercased()
+        guard (1...253).contains(host.count), !host.hasSuffix("."), host.unicodeScalars.allSatisfy({
+            (0x21...0x7e).contains(Int($0.value))
+        }) else { return nil }
+        guard host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ label in
+            (1...63).contains(label.count) && label.first != "-" && label.last != "-" &&
+                label.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+        }) else { return nil }
+        return host
+    }
+
+    static let hnsMaxHeaderBytes = 32 * 1024
+    static let hnsMaxBodyBytes = 64 * 1024
+    static let hnsMaxRecordBytes = 32 * 1024
 }

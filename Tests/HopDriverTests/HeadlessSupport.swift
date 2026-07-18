@@ -21,7 +21,7 @@ extension XCTestCase {
                             relay: String? = nil, name: String = "hl") -> HopBearer {
         let db = FileManager.default.temporaryDirectory
             .appendingPathComponent("hop-hl-\(UUID().uuidString).db").path
-        return HopBearer(config: .init(
+        let bearer = HopBearer(config: .init(
             dbPath: db,
             deviceSeed: Data(repeating: seed, count: 32),
             appSecret: Data(repeating: 0x48, count: 32),
@@ -29,6 +29,8 @@ extension XCTestCase {
             defaultRelay: relay,
             role: role,
             dbKey: Data()))   // plain store - headless test, no key material needed
+        addTeardownBlock { bearer.shutdownForTesting() }
+        return bearer
     }
 
     /// Drain queued node work (`core` is serial, so a `sync {}` is a barrier) plus the main-queue

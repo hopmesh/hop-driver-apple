@@ -16,7 +16,7 @@ final class HeadlessMappingTests: XCTestCase {
     func testApplyInboxSurfacesIncomingTextAndCreatesContact() {
         let b = makeHeadlessBearer()
         let from = addr(0xA1)
-        let msg = InboxMessage(from: from, contentType: "text/plain", body: Data("hi".utf8),
+        let msg = InboxMessage(id: addr(0x01), from: from, contentType: "text/plain", body: Data("hi".utf8),
                                hops: 3, createdAt: HopBearer.nowMs() - 500, trace: [])
         b.applyInbox([msg])
         XCTAssertEqual(b.messages.last?.text, "hi")
@@ -30,7 +30,9 @@ final class HeadlessMappingTests: XCTestCase {
     func testApplyInboxImageMessage() {
         let b = makeHeadlessBearer()
         let img = Data([0xff, 0xd8, 0x00, 0x11])
-        let msg = InboxMessage(from: addr(0xA2), contentType: "image/png", body: img,
+        let from = addr(0xA2)
+        b.rememberContact(HopBearer.Peer(address: from, name: "known", hops: 0))
+        let msg = InboxMessage(id: addr(0x02), from: from, contentType: "image/png", body: img,
                                hops: 1, createdAt: HopBearer.nowMs(), trace: [])
         b.applyInbox([msg])
         XCTAssertEqual(b.messages.last?.imageData, img)
@@ -40,12 +42,58 @@ final class HeadlessMappingTests: XCTestCase {
     func testApplyInboxMultipartSplitsTextAndImages() {
         let b = makeHeadlessBearer()
         let img = Data([0x01, 0x02, 0x03])
+        let from = addr(0xA3)
+        b.rememberContact(HopBearer.Peer(address: from, name: "known", hops: 0))
         let body = HopBearer.encodeMultipart([("text/plain", Data("cap".utf8)), ("image/jpeg", img)])
-        let msg = InboxMessage(from: addr(0xA3), contentType: "multipart/mixed", body: body,
+        let msg = InboxMessage(id: addr(0x03), from: from, contentType: "multipart/mixed", body: body,
                                hops: 2, createdAt: HopBearer.nowMs(), trace: [])
         b.applyInbox([msg])
         XCTAssertEqual(b.messages.last?.text, "cap")
         XCTAssertEqual(b.messages.last?.images, [img])
+    }
+
+    func testApplyInboxRejectsUnknownAttachment() {
+        let b = makeHeadlessBearer()
+        let id = addr(0x33)
+        var accepted: [Data] = []
+        b.acceptInboxForTest = { accepted.append($0); return true }
+        b.applyInbox([InboxMessage(
+            id: id, from: addr(0xB3), contentType: "image/jpeg", body: Data([1, 2, 3]),
+            hops: 1, createdAt: HopBearer.nowMs(), trace: []
+        )])
+        settle(b)
+        XCTAssertTrue(b.messages.isEmpty)
+        XCTAssertEqual(accepted, [id], "rejected media is acknowledged so it cannot redeliver forever")
+    }
+
+    func testApplyInboxLeavesKnownOverLimitAttachmentPending() {
+        let b = makeHeadlessBearer()
+        let from = addr(0xB5)
+        b.rememberContact(HopBearer.Peer(address: from, name: "known", hops: 0))
+        var accepted: [Data] = []
+        b.acceptInboxForTest = { accepted.append($0); return true }
+        b.applyInbox([InboxMessage(
+            id: addr(0x35), from: from, contentType: "image/jpeg",
+            body: Data(repeating: 7, count: RetentionPolicy.defaults.attachmentBytes + 1),
+            hops: 1, createdAt: HopBearer.nowMs(), trace: []
+        )])
+        settle(b)
+        XCTAssertTrue(accepted.isEmpty)
+        XCTAssertTrue(b.messages.isEmpty)
+    }
+
+    func testApplyInboxUnknownMultipartKeepsTextAndDropsMedia() {
+        let b = makeHeadlessBearer()
+        let body = HopBearer.encodeMultipart([
+            ("text/plain", Data("safe".utf8)), ("image/jpeg", Data([1, 2, 3])),
+        ])
+        b.applyInbox([InboxMessage(
+            id: addr(0x34), from: addr(0xB4), contentType: "multipart/mixed", body: body,
+            hops: 1, createdAt: HopBearer.nowMs(), trace: []
+        )])
+        XCTAssertEqual(b.messages.last?.text, "safe")
+        XCTAssertTrue(b.messages.last?.images.isEmpty ?? false)
+        XCTAssertEqual(b.messages.last?.contentType, "text/plain")
     }
 
     func testApplyInboxDoesNotCountTheChatOnScreen() {
@@ -53,9 +101,53 @@ final class HeadlessMappingTests: XCTestCase {
         let from = addr(0xA4)
         let who = HopBearer.shortHex(from)   // unknown sender ⇒ display name is the short id
         b.openChat(who)                      // that chat is on screen
-        b.applyInbox([InboxMessage(from: from, contentType: "text/plain", body: Data("seen".utf8),
+        b.applyInbox([InboxMessage(id: addr(0x04), from: from, contentType: "text/plain", body: Data("seen".utf8),
                                    hops: 0, createdAt: HopBearer.nowMs(), trace: [])])
         XCTAssertEqual(b.totalUnread, 0, "a message for the open chat is not badged")
+    }
+
+    func testApplyInboxDeduplicatesARepeatedStableId() {
+        let b = makeHeadlessBearer()
+        let id = addr(0x05)
+        let msg = InboxMessage(id: id, from: addr(0xA5), contentType: "text/plain",
+                               body: Data("once".utf8), hops: 1, createdAt: HopBearer.nowMs(), trace: [])
+        b.applyInbox([msg])
+        b.applyInbox([msg])
+        XCTAssertEqual(b.messages.filter { $0.inboxId == id }.count, 1)
+    }
+
+    func testApplyInboxKeepsTheStableIdPendingUntilAMirrorRetrySucceeds() {
+        let b = makeHeadlessBearer()
+        let id = addr(0x06)
+        let msg = InboxMessage(id: id, from: addr(0xA6), contentType: "text/plain",
+                               body: Data("retry".utf8), hops: 1, createdAt: HopBearer.nowMs(), trace: [])
+        var mirrorAttempts = 0
+        b.persistInboxForTest = { _, _ in
+            mirrorAttempts += 1
+            return mirrorAttempts > 1
+        }
+        let lock = NSLock()
+        var accepted: [Data] = []
+        b.acceptInboxForTest = { acceptedId in
+            lock.lock(); defer { lock.unlock() }
+            accepted.append(acceptedId)
+            return true
+        }
+
+        b.applyInbox([msg])
+        settle(b)
+        lock.lock()
+        XCTAssertTrue(accepted.isEmpty, "a failed mirror write must leave the core inbox pending")
+        lock.unlock()
+
+        b.applyInbox([msg])
+        settle(b)
+        lock.lock()
+        let acceptedAfterRetry = accepted
+        lock.unlock()
+        XCTAssertEqual(mirrorAttempts, 2)
+        XCTAssertEqual(acceptedAfterRetry, [id], "the same stable id is accepted exactly once after persistence")
+        XCTAssertEqual(b.messages.filter { $0.inboxId == id }.count, 1, "the mirror retry does not duplicate UI history")
     }
 
     // MARK: applyOutgoing
@@ -80,10 +172,18 @@ final class HeadlessMappingTests: XCTestCase {
 
     func testApplyServiceResponsesLogsANonIdentityReply() {
         let b = makeHeadlessBearer()
+        let accepted = expectation(description: "service response accepted after delivery")
+        b.acceptServiceResponseForTest = { _ in
+            XCTAssertTrue(b.serviceLog.first?.contains("pong") ?? false)
+            accepted.fulfill()
+            return true
+        }
         // A response whose request id is not an outstanding identify ⇒ the generic service-log branch.
-        let resp = ServiceResp(from: addr(0xB3), forRequestId: addr(0xB4), status: 200, body: Data("pong".utf8))
+        let resp = ServiceResp(id: addr(0xE1), from: addr(0xB3), forRequestId: addr(0xB4),
+                               status: 200, body: Data("pong".utf8))
         b.applyServiceResponses([resp])
         XCTAssertTrue(b.serviceLog.first?.contains("pong") ?? false)
+        wait(for: [accepted], timeout: 2)
     }
 
     func testApplyServiceResponsesConsumesAnIdentifyRequestIdOnNonZeroStatus() {
@@ -91,7 +191,8 @@ final class HeadlessMappingTests: XCTestCase {
         let reqId = addr(0xB5)
         b.identifyReqs.insert(reqId)   // pretend we sent an identify with this id
         // status != 0 ⇒ not a successful identify body, so it removes the outstanding id and logs generic.
-        b.applyServiceResponses([ServiceResp(from: addr(0xB6), forRequestId: reqId, status: 5, body: Data())])
+        b.applyServiceResponses([ServiceResp(id: addr(0xE2), from: addr(0xB6),
+                                              forRequestId: reqId, status: 5, body: Data())])
         XCTAssertFalse(b.identifyReqs.contains(reqId), "the outstanding identify id is consumed")
     }
 
@@ -116,21 +217,32 @@ final class HeadlessMappingTests: XCTestCase {
 
     func testApplyHttpResponsesCompletesAWebRequestThenTheTextBox() {
         let b = makeHeadlessBearer()
+        var webCompleted = false
+        let accepted = expectation(description: "HTTP responses accepted after delivery")
+        accepted.expectedFulfillmentCount = 2
+        b.acceptHttpResponseForTest = { id in
+            if id == self.addr(0xE3) { XCTAssertTrue(webCompleted) }
+            if id == self.addr(0xE4) { XCTAssertEqual(b.hopsResults["news.hop"], "200 · headline") }
+            accepted.fulfill()
+            return true
+        }
         // WebView completion path (takes priority).
         let webId = addr(0xC1)
         let webDone = expectation(description: "web http")
         b.hopsWebReqs[webId] = { resp in
-            XCTAssertEqual(resp.status, 201); XCTAssertEqual(resp.body, Data("page".utf8)); webDone.fulfill()
+            XCTAssertEqual(resp.status, 201); XCTAssertEqual(resp.body, Data("page".utf8))
+            webCompleted = true; webDone.fulfill()
         }
-        b.applyHttpResponses([HttpResp(from: addr(0xC2), forRequestId: webId, status: 201,
+        b.applyHttpResponses([HttpResp(id: addr(0xE3), from: addr(0xC2), forRequestId: webId, status: 201,
                                        contentType: "text/html", body: Data("page".utf8))])
         wait(for: [webDone], timeout: 2)
         // Text-box path (rendered into hopsResults).
         let textId = addr(0xC3)
         b.hopsReqs[textId] = "news.hop"
-        b.applyHttpResponses([HttpResp(from: addr(0xC4), forRequestId: textId, status: 200,
+        b.applyHttpResponses([HttpResp(id: addr(0xE4), from: addr(0xC4), forRequestId: textId, status: 200,
                                        contentType: "text/plain", body: Data("headline".utf8))])
         XCTAssertEqual(b.hopsResults["news.hop"], "200 · headline")
+        wait(for: [accepted], timeout: 2)
     }
 
     func testApplyDnsLookupsEmptyIsInert() {
@@ -144,7 +256,8 @@ final class HeadlessMappingTests: XCTestCase {
         let b = makeHeadlessBearer()
         b.hpsSubscribe(hostBase58: base58(addr(0xD1)), path: "topic-x")
         let topic = b.hpsTopics.first { $0.path == "topic-x" }!
-        b.applyHpsMessages([HpsMessage(path: "topic-x", sender: addr(0xD2), body: Data("posted".utf8))])
+        b.applyHpsMessages([HpsMessage(id: addr(0xE5), path: "topic-x", sender: addr(0xD2),
+                                       body: Data("posted".utf8))])
         XCTAssertEqual(b.hpsThreads[topic.id]?.last?.text, "posted")
         XCTAssertEqual(b.hpsUnread[topic.id], 1, "a message for a topic not on screen is badged")
         settle(b)
@@ -155,9 +268,47 @@ final class HeadlessMappingTests: XCTestCase {
         b.hpsSubscribe(hostBase58: base58(addr(0xD3)), path: "topic-y")
         let topic = b.hpsTopics.first { $0.path == "topic-y" }!
         b.openTopic(topic.id)
-        b.applyHpsMessages([HpsMessage(path: "topic-y", sender: addr(0xD4), body: Data("live".utf8))])
+        b.applyHpsMessages([HpsMessage(id: addr(0xE6), path: "topic-y", sender: addr(0xD4),
+                                       body: Data("live".utf8))])
         XCTAssertEqual(b.hpsUnread[topic.id] ?? 0, 0)
         settle(b)
+    }
+
+    func testApplyHpsMessagesRetriesTheSameStableIdAfterJournalFailure() {
+        let b = makeHeadlessBearer()
+        b.hpsSubscribe(hostBase58: base58(addr(0xD5)), path: "topic-retry")
+        let topic = b.hpsTopics.first { $0.path == "topic-retry" }!
+        let id = addr(0xE7)
+        let message = HpsMessage(id: id, path: "topic-retry", sender: addr(0xD6),
+                                 body: Data("retry".utf8))
+        var attempts = 0
+        b.persistHpsForTest = { _, _, _ in
+            attempts += 1
+            return attempts > 1
+        }
+        let lock = NSLock()
+        var accepted: [Data] = []
+        b.acceptHpsForTest = { acceptedId in
+            lock.lock(); defer { lock.unlock() }
+            accepted.append(acceptedId)
+            return true
+        }
+
+        b.applyHpsMessages([message])
+        settle(b)
+        lock.lock()
+        XCTAssertTrue(accepted.isEmpty, "a failed journal append must leave the core item pending")
+        lock.unlock()
+        XCTAssertNil(b.hpsThreads[topic.id])
+
+        b.applyHpsMessages([message])
+        settle(b)
+        lock.lock()
+        let acceptedAfterRetry = accepted
+        lock.unlock()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(acceptedAfterRetry, [id])
+        XCTAssertEqual(b.hpsThreads[topic.id]?.filter { $0.inboxId == id }.count, 1)
     }
 
     func testApplyHpsInvitesDeduplicates() {

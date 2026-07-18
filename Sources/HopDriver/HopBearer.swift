@@ -37,8 +37,20 @@ public enum IdentityStore {
 
     /// The 32-byte Ed25519 identity seed. Random, stored once in the Keychain, stable across launches
     /// (and reboots after first unlock). Not derivable from any non-secret device attribute.
-    public static func deviceSeed() -> Data {
-        let r = HopKeychain.secret(account: HopKeychain.identityAccount)
+    public struct Secrets {
+        public let identity: Data
+        public let database: Data
+    }
+
+    public static func secrets() throws -> Secrets {
+        let identity = try HopKeychain.secret(account: HopKeychain.identityAccount)
+        let database = try HopKeychain.secret(account: HopKeychain.dbKeyAccount)
+        note = "identity: \(identity.origin.rawValue)"
+        return Secrets(identity: identity.bytes, database: database.bytes)
+    }
+
+    public static func deviceSeed() throws -> Data {
+        let r = try HopKeychain.secret(account: HopKeychain.identityAccount)
         note = "identity: \(r.origin.rawValue)"
         return r.bytes
     }
@@ -48,8 +60,8 @@ public enum IdentityStore {
     /// secret that is NOT derivable from the vendor id, and (c) NOT present in the db file - a pulled
     /// or backed-up `hop.db` is useless without the device's Keychain. Only encrypts when libhop is
     /// built `--features sqlcipher` (otherwise the key is accepted but the db stays plain).
-    public static func dbKey() -> Data {
-        HopKeychain.secret(account: HopKeychain.dbKeyAccount).bytes
+    public static func dbKey() throws -> Data {
+        try HopKeychain.secret(account: HopKeychain.dbKeyAccount).bytes
     }
 }
 
@@ -81,7 +93,7 @@ public final class HopBearer: NSObject, ObservableObject {
         public var dbKey: Data
         public init(dbPath: String, deviceSeed: Data, appSecret: Data,
                     displayName: String, defaultRelay: String?, role: Role = .full,
-                    dbKey: Data = IdentityStore.dbKey()) {
+                    dbKey: Data = Data()) {
             self.dbPath = dbPath; self.deviceSeed = deviceSeed; self.appSecret = appSecret
             self.displayName = displayName; self.defaultRelay = defaultRelay; self.role = role
             self.dbKey = dbKey
@@ -200,6 +212,7 @@ public final class HopBearer: NSObject, ObservableObject {
     }
     @Published public var idNote = ""   // identity persistence outcome (diagnostic)
     @Published public var status = "starting…" { didSet { NSLog("HOPLOG status: \(status)") } }
+    @Published public internal(set) var persistenceError: String?
     @Published public var reachable: [Peer] = []   // discovered now (direct + mesh)
     @Published public var seen: [Peer] = []        // historical, not currently reachable
     @Published public var secured: Set<Data> = []  // addresses we have a forward-secret session with
@@ -226,18 +239,40 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Resolved display name per 8-byte short address, for resolving trace hops (§27/§29).
     @Published public var nameByShort: [Data: String] = [:]
     @Published public var serviceLog: [String] = []   // hop.identify + custom service-call activity (§29)
-    var identities: [Data: IdentityInfo] = [:]   // address → identify record (internal: test seam)
-    var identifyAsked = Set<Data>()              // addresses we've sent hop.identify to (internal: sibling files)
-    var identifyReqs = Set<Data>()               // outstanding identify request bundle ids (internal: test seam)
-    @Published public var messages: [Message] = [] { didSet { scheduleMessageSave() } }
+    var identities = BoundedLruMap<Data, IdentityInfo>(maximum: RetentionPolicy.defaults.metadataEntries)
+    var identifyAsked = BoundedLruSet<Data>(maximum: RetentionPolicy.defaults.metadataEntries)
+    var identifyReqs = BoundedLruSet<Data>(maximum: RetentionPolicy.defaults.metadataEntries)
+    @Published public var messages: [Message] = [] {
+        didSet {
+            if !applyingRetention {
+                let retained = RetentionPolicy.retain(messages)
+                if retained.count != messages.count {
+                    applyingRetention = true
+                    messages = retained
+                    applyingRetention = false
+                    return
+                }
+            }
+            pendingQuota.reconcile(messages)
+            scheduleMessageSave()
+        }
+    }
     /// Latest hops:// result per domain, rendered for the UI ("200 · <body>" or an error).
     @Published public var hopsResults: [String: String] = [:]   // domain → rendered text (§30)
     @Published public var queue: [QueueRow] = []
     @Published public var unread: [String: Int] = [:] { didSet { updateAppBadge() } }   // peer name → unread incoming count
     var activePeer: String?              // chat currently on screen (not counted) (internal: sibling files)
-    private var loadingMessages = false          // suppress save while restoring history
+    var loadingMessages = false          // suppress save while restoring history
+    private var applyingRetention = false
+    let pendingQuota = PendingQuota()
+    var durableInboxIds = BoundedLruSet<Data>(maximum: RetentionPolicy.defaults.globalMessages +
+        RetentionPolicy.defaults.pendingGlobalMessages + RetentionPolicy.defaults.journalRecords)
+    var durableHpsIds = BoundedLruSet<Data>(maximum: RetentionPolicy.defaults.globalMessages +
+        RetentionPolicy.defaults.journalRecords)
     private var messageSaveWork: DispatchWorkItem?  // debounced history write
     private var channelSaveWork: DispatchWorkItem?  // debounced channel-thread write
+    private var messageCompactionDeadline = CompactionDeadline()
+    private var channelCompactionDeadline = CompactionDeadline()
 
     /// The Hop node - created in `init(config:)` from the host's db path / identity seed / app
     /// secret. Identity is derived from the seed (stable address every launch, no storage to
@@ -274,7 +309,7 @@ public final class HopBearer: NSObject, ObservableObject {
     // transport state was removed in the app cutover. Those transports are now owned entirely by the
     // shared BleBearer / LanBearer (HopBearerBle / HopBearerLan), which mint their links through the
     // BearerManager. Multipeer (Wi-Fi P2P), the cloud relay, and hops:// endpoints remain in-driver.
-    var nameByAddr: [Data: String] = [:]       // internal: test seam
+    var nameByAddr = BoundedLruMap<Data, String>(maximum: RetentionPolicy.defaults.metadataEntries)
     var contacts: [Data: Peer] = [:]   // app-side contact book (address → peer) (internal: test seam)
     /// Our own raw 32-byte address (for marking our own hps posts).
     public var myAddressData: Data { myAddrCache }
@@ -302,10 +337,21 @@ public final class HopBearer: NSObject, ObservableObject {
     /// cached/needs-resolver branches through the real node. Defaults to nil, so production is
     /// unchanged: always resolves through the real `node.resolveHns`.
     var resolveHnsForTest: ((String) -> HnsLookupResult)?
+    /// Test seam for the network-bound endpoint dial. Production leaves it nil.
+    var dialEndpointForTest: ((String) -> UInt64)?
+    /// Test seams for durable inbox and HPS acceptance. Production leaves these nil and uses the
+    /// append-only mirror journals followed by the matching node acceptance call.
+    var persistInboxForTest: ((Data, Message?) -> Bool)?
+    var acceptInboxForTest: ((Data) -> Bool)?
+    var persistHpsForTest: ((Data, String, HpsMsgRow?) -> Bool)?
+    var acceptHpsForTest: ((Data) -> Bool)?
+    var acceptServiceResponseForTest: ((Data) -> Bool)?
+    var acceptHttpResponseForTest: ((Data) -> Bool)?
     private var lastRelayLog = -1
     private var lastReachLog = -1
     private var tickTimer: Timer?
     private var started = false
+    private var shuttingDown = false
     private var appActive = true   // our app foreground state, carried in presence
     // Real Wi-Fi availability (MC's session object stays non-nil even when the radio is
     // off in Settings, so we can't infer the radio from it).
@@ -613,10 +659,9 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Drain ALL node outputs on `core` (the only queue allowed to touch `node`), then apply the
     /// resulting plain-data snapshots on main (link routing + @Published + bookkeeping). Safe to call
     /// from any thread.
-    /// Drain the node and apply results on the main actor. `flushAfter` (set by a background wake, see
-    /// `backgroundTick`) forces the debounced mirror writes to disk synchronously once the inbox has been
-    /// applied, so a message received during a short/locked background wake can't be lost to the 1s save
-    /// debounce if iOS suspends us (apple-r3-01).
+    /// Drain the node and apply results on the main actor. Inbox history is persisted before explicit
+    /// core acceptance; `flushAfter` still forces any other pending debounced mirror writes during a
+    /// short background wake (apple-r3-01).
     func pump(flushAfter: Bool = false) {
         core.async { [weak self] in
             guard let self else { return }
@@ -630,6 +675,7 @@ public final class HopBearer: NSObject, ObservableObject {
             let hpsMsgs = self.node.takeHpsMessages()
             let hpsInvs = self.node.takeHpsInvites()
             DispatchQueue.main.async {
+                guard !self.shuttingDown else { return }
                 self.applyOutgoing(outgoing)
                 self.scheduleRefresh()
                 self.applyInbox(inbox)
@@ -721,36 +767,52 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Coalesce rapid mutations into one disk write (≤1 write/sec) so appending a burst of
     /// messages doesn't re-encode the whole history each time.
     private func scheduleMessageSave() {
-        guard !loadingMessages else { return }   // don't echo the load back to disk
+        guard !loadingMessages, !shuttingDown else { return }   // don't echo the load back to disk
         messageSaveWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveMessages() }
+        let delay = messageCompactionDeadline.nextDelay(
+            now: ProcessInfo.processInfo.systemUptime, debounce: 1, maximumDelay: 5
+        )
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.messageSaveWork = nil
+            self.messageCompactionDeadline.clear()
+            self.saveMessages()
+        }
         messageSaveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    func scheduleMessageJournalCompaction() { scheduleMessageSave() }
+
     /// apple-r3-01: flush any pending debounced mirror writes SYNCHRONOUSLY. The 1s debounce in
-    /// `scheduleMessageSave`/`scheduleChannelSave` coalesces write bursts, but it also opens a window:
-    /// a background/locked wake drains the node inbox into `messages` (destructive `takeInbox`), yet the
-    /// mirror write is deferred 1s. If iOS suspends or kills the app inside that window, the received
-    /// message is gone from the node inbox but not yet in messages.json, so it vanishes from chat history
-    /// on relaunch. Calling this at the end of a background pump and on scenePhase==.background cancels the
-    /// pending debounce and writes NOW, closing the window. Idempotent and cheap when nothing is pending
-    /// (only writes if a save was actually queued). Must be called on the main actor (touches `messages`).
+    /// `scheduleMessageSave`/`scheduleChannelSave` coalesces write bursts. Inbox delivery now bypasses
+    /// this window by persisting before explicit core acceptance; this method still closes the debounce
+    /// window for local sends and channel history when iOS backgrounds the app. Idempotent and cheap when
+    /// nothing is pending. Must be called on the main actor because it touches `messages`.
     public func flushPendingSaves() {
+        guard !shuttingDown else { return }
         if messageSaveWork != nil {
             messageSaveWork?.cancel()
             messageSaveWork = nil
+            messageCompactionDeadline.clear()
             saveMessages()
         }
         if channelSaveWork != nil {
             channelSaveWork?.cancel()
             channelSaveWork = nil
+            channelCompactionDeadline.clear()
             saveChannels()
         }
+        MirrorStore.flush()
     }
 
     func saveMessages() {
-        MirrorStore.saveMessages(messages)
+        let retained = RetentionPolicy.retain(messages)
+        if MirrorStore.saveMessages(retained) {
+            durableInboxIds.replace(with: retained.compactMap(\.inboxId))
+        } else {
+            persistenceError = "failed to persist messages"
+        }
         writeAutomationDump()   // TEST/AUTOMATION: mirror self-addr + rx/tx for the headless harness
     }
 
@@ -772,22 +834,47 @@ public final class HopBearer: NSObject, ObservableObject {
     }
 
     private func scheduleChannelSave() {
-        guard !loadingMessages else { return }
+        guard !loadingMessages, !shuttingDown else { return }
         channelSaveWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveChannels() }
+        let delay = channelCompactionDeadline.nextDelay(
+            now: ProcessInfo.processInfo.systemUptime, debounce: 1, maximumDelay: 5
+        )
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.channelSaveWork = nil
+            self.channelCompactionDeadline.clear()
+            self.saveChannels()
+        }
         channelSaveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
-    func saveChannels() { MirrorStore.saveChannels(hpsThreads) }
+    func scheduleChannelJournalCompaction() { scheduleChannelSave() }
+    func saveChannels() {
+        if MirrorStore.saveChannels(hpsThreads) {
+            durableHpsIds.replace(with: hpsThreads.values.flatMap { $0 }.compactMap(\.inboxId))
+        } else {
+            persistenceError = "failed to persist channels"
+        }
+    }
     func loadChannels() {
-        guard let stored = MirrorStore.loadChannels() else { return }
+        guard let loaded = MirrorStore.loadChannels() else { return }
+        durableHpsIds.replace(with: loaded.durableIds)
         loadingMessages = true
-        hpsThreads = stored
+        hpsThreads = loaded.threads
         loadingMessages = false
+        if MirrorStore.saveChannels(hpsThreads) {
+            durableHpsIds.replace(with: hpsThreads.values.flatMap { $0 }.compactMap(\.inboxId))
+        } else {
+            persistenceError = "failed to reconcile channels"
+        }
     }
 
     func loadMessages() {
-        guard let restored = MirrorStore.loadMessages() else { return }
+        guard let loaded = MirrorStore.loadMessages() else { return }
+        durableInboxIds.replace(with: loaded.durableIds)
+        let restored = RetentionPolicy.retain(loaded.messages)
+        if !MirrorStore.saveMessages(restored) { persistenceError = "failed to reconcile messages" }
+        else { durableInboxIds.replace(with: restored.compactMap(\.inboxId)) }
         loadingMessages = true
         // An outgoing message still in flight when we quit KEEPS sending: the node persists the bundle and
         // re-sprays it after restart until its delivery ACK (node.rs rehydrate). MirrorStore restores it
@@ -803,6 +890,10 @@ public final class HopBearer: NSObject, ObservableObject {
     /// Add a peer to the address book and persist immediately (e.g. on send / manual add) so the
     /// conversation is reachable even if we quit before the next throttled save.
     public func rememberContact(_ peer: Peer) {
+        guard RetentionPolicy.canAddContact(
+            currentCount: contacts.count,
+            alreadyKnown: contacts[peer.address] != nil
+        ) else { return }
         if contacts[peer.address] == nil { contacts[peer.address] = peer }
         nameByAddr[peer.address] = peer.name
         saveContacts(force: true)
@@ -811,13 +902,36 @@ public final class HopBearer: NSObject, ObservableObject {
     /// messaged by is kept, so their conversation is reachable even when offline / out of range. The
     /// throttle decision stays here (owns `lastContactSaveAt`); MirrorStore does the snapshot + async write.
     func saveContacts(force: Bool = false) {
+        guard !shuttingDown else { return }
         guard force || Date().timeIntervalSince(lastContactSaveAt) > 4 else { return }
         lastContactSaveAt = Date()
-        MirrorStore.saveContacts(Array(contacts.values))
+        let snapshot = contacts.values.sorted { $0.address.lexicographicallyPrecedes($1.address) }
+        MirrorStore.saveContacts(snapshot) { [weak self] success in
+            guard !success else { return }
+            DispatchQueue.main.async { self?.persistenceError = "failed to persist contacts" }
+        }
+    }
+
+    /// Stop delayed persistence and queued node callbacks before a headless test releases this bearer.
+    /// Production owns one long-lived bearer; tests create many against the process-global mirror store.
+    func shutdownForTesting() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        shuttingDown = true
+        messageSaveWork?.cancel()
+        messageSaveWork = nil
+        channelSaveWork?.cancel()
+        channelSaveWork = nil
+        tickTimer?.invalidate()
+        tickTimer = nil
+        pathMonitor.cancel()
+        bearerMgr.stop()
+        core.sync {}
+        MirrorStore.flush()
     }
     func loadContacts() {
         guard let loaded = MirrorStore.loadContacts() else { return }
-        for c in loaded where contacts[c.address] == nil {
+        for c in loaded.sorted(by: { $0.address.lexicographicallyPrecedes($1.address) })
+            .prefix(RetentionPolicy.defaults.contacts) where contacts[c.address] == nil {
             contacts[c.address] = c
             nameByAddr[c.address] = c.name
         }
@@ -891,7 +1005,12 @@ public final class HopBearer: NSObject, ObservableObject {
 
         // Accumulate everyone we've ever seen into the (persisted) contact book; those not
         // currently reachable form the "seen" list - reachable across restarts + out-of-range.
-        for peer in reachable { contacts[peer.address] = peer }
+        for peer in reachable.sorted(by: { $0.address.lexicographicallyPrecedes($1.address) }) {
+            if RetentionPolicy.canAddContact(
+                currentCount: contacts.count,
+                alreadyKnown: contacts[peer.address] != nil
+            ) { contacts[peer.address] = peer }
+        }
         let here = Set(reachable.map { $0.address })
         seen = contacts.filter { !here.contains($0.key) }
             .map { Peer(address: $0.key, name: $0.value.name, hops: 0,
@@ -982,7 +1101,7 @@ public final class HopBearer: NSObject, ObservableObject {
         // Index every known full address by its 8-byte short form so trace hops (§27)
         // resolve to display names.
         var ns = [Data: String]()
-        for (addr, name) in nameByAddr { ns[HopBearer.shortData(addr)] = name }
+        for (addr, name) in nameByAddr.snapshot { ns[HopBearer.shortData(addr)] = name }
         nameByShort = ns
 
         queue = RefreshMapper.mapQueue(snap.queue)

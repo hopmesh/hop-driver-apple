@@ -22,6 +22,86 @@ import HopFFIBindings
 import UIKit
 #endif
 
+/// A one-shot, no-redirect URLSession delegate that caps a reach-record response while it streams.
+private final class ReachRecordLoader: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
+    private let expectedURL: URL
+    private let completion: (Data) -> Void
+    private var received = Data()
+    private var response: URLResponse?
+    private var rejected = false
+    private var finished = false
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 20
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
+
+    init(url: URL, completion: @escaping (Data) -> Void) {
+        self.expectedURL = url
+        self.completion = completion
+    }
+
+    func start() {
+        var request = URLRequest(url: expectedURL)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        session.dataTask(with: request).resume()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        rejected = true
+        completionHandler(nil)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        self.response = response
+        guard let http = response as? HTTPURLResponse,
+              http.url == expectedURL,
+              http.statusCode == 200,
+              http.mimeType?.lowercased() == "application/json",
+              http.allHeaderFields.reduce(0, { total, item in
+                  total + String(describing: item.key).utf8.count + String(describing: item.value).utf8.count + 4
+              }) <= HopBearer.hnsMaxHeaderBytes,
+              response.expectedContentLength < 0 ||
+                response.expectedContentLength <= Int64(HopBearer.hnsMaxBodyBytes) else {
+            rejected = true
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard !rejected else { return }
+        if received.count > HopBearer.hnsMaxBodyBytes - data.count {
+            rejected = true
+            dataTask.cancel()
+            return
+        }
+        received.append(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !finished else { return }
+        finished = true
+        let record = error == nil && !rejected
+            ? HopBearer.validatedReachRecord(data: received, response: response, expectedURL: expectedURL)
+            : Data()
+        completion(record)
+        session.finishTasksAndInvalidate()
+    }
+}
+
 extension HopBearer {
 
     // MARK: - Wi-Fi (MultipeerConnectivity) bearer
@@ -142,7 +222,7 @@ extension HopBearer {
         // Open a direct link to the endpoint (wss://<domain>) so the sealed request has a path
         // to it - the endpoint doesn't transit our relay (§30). Spray-and-wait holds the
         // bundle and delivers it the moment the Noise handshake on this link completes.
-        dialEndpoint(domain)
+        _ = dialEndpointForTest?(domain) ?? dialEndpoint(domain)
         hopsResults[domain] = "fetching…"
         core.async { [weak self] in
             guard let self else { return }
@@ -160,7 +240,7 @@ extension HopBearer {
     func fireHopsWeb(domain: String, path: String, endpoint: Data,
                              completion: @escaping (HopResponse) -> Void) {
         nameByAddr[endpoint] = domain   // label by domain from HNS (no identify needed)
-        dialEndpoint(domain)   // direct link to the endpoint (§30)
+        _ = dialEndpointForTest?(domain) ?? dialEndpoint(domain)   // direct link to the endpoint (§30)
         core.async { [weak self] in
             guard let self else { return }
             let id = try? self.node.sendHopsRequest(endpoint: endpoint, host: domain,
@@ -194,7 +274,7 @@ extension HopBearer {
     /// (bad URL, network, non-2xx, malformed body) hands core an empty record, which it negative-caches.
     /// The record parse is the pure `Self.reachRecord(fromWellKnown:)`, unit-tested in HopBearer+Hns.swift.
     func fetchReachRecord(_ domain: String) {
-        guard let url = URL(string: "https://\(domain)/.well-known/hop") else {
+        guard let url = Self.canonicalReachRecordURL(domain: domain) else {
             core.async { [weak self] in
                 guard let self else { return }
                 self.node.provideReachRecord(domain: domain, record: Data())
@@ -202,15 +282,13 @@ extension HopBearer {
             }
             return
         }
-        URLSession.shared.dataTask(with: url) { [weak self] data, resp, _ in
+        ReachRecordLoader(url: url) { [weak self] record in
             guard let self else { return }
-            let ok = (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
-            let record = ok ? Self.reachRecord(fromWellKnown: data) : Data()
             self.core.async {                            // node access on core
                 self.node.provideReachRecord(domain: domain, record: record)
                 self.pump()
             }
-        }.resume()
+        }.start()
     }
 
     // MARK: - Local user notification (UIKit app state)

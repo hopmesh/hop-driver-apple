@@ -32,10 +32,13 @@ final class HeadlessHnsTests: XCTestCase {
         let b = makeHeadlessBearer()
         let endpoint = Data(repeating: 0x91, count: 32)
         b.resolveHnsForTest = { _ in .cached(address: endpoint) }
-        b.openHops("hops://no url domain/page")   // the space defeats URL(string:) in dialEndpoint
+        b.dialEndpointForTest = { _ in 1 }
+        b.backgroundTick()
         settle(b)
-        XCTAssertEqual(b.hopsResults["no url domain"], "fetching…", "a cached positive address fires the request")
-        XCTAssertEqual(b.nameByAddr[endpoint], "no url domain", "the endpoint is labeled by its resolved domain")
+        b.openHops("hops://no-network.invalid/page")
+        settle(b)
+        XCTAssertEqual(b.hopsResults["no-network.invalid"], "fetching…", "a cached positive address fires the request")
+        XCTAssertEqual(b.nameByAddr[endpoint], "no-network.invalid", "the endpoint is labeled by its resolved domain")
     }
 
     func testOpenHopsNeedsResolverSetsOfflineError() {
@@ -66,11 +69,14 @@ final class HeadlessHnsTests: XCTestCase {
         let b = makeHeadlessBearer()
         let endpoint = Data(repeating: 0x92, count: 32)
         b.resolveHnsForTest = { _ in .cached(address: endpoint) }
+        b.dialEndpointForTest = { _ in 1 }
+        b.backgroundTick()
+        settle(b)
         // fireHopsWeb's own completion only fires over a real (nonexistent) mesh round trip or a 30s
         // timeout, so assert its synchronous side effect instead of waiting on the callback.
-        b.hopsFetch(domain: "no url web", path: "/x") { _ in }
+        b.hopsFetch(domain: "no-network.invalid", path: "/x") { _ in }
         settle(b)
-        XCTAssertEqual(b.nameByAddr[endpoint], "no url web", "a cached positive address dials the web fetch")
+        XCTAssertEqual(b.nameByAddr[endpoint], "no-network.invalid", "a cached positive address dials the web fetch")
     }
 
     func testHopsFetchPendingQueuesTheWebCompletion() {
@@ -98,17 +104,19 @@ final class HeadlessHnsTests: XCTestCase {
 
     func testApplyHnsResultsPositiveRecordFiresTheTextFetch() {
         let b = makeHeadlessBearer()
-        b.pendingHops["no url text"] = "/page"
-        b.applyHnsResults([HnsRecord(domain: "no url text", address: Data(repeating: 0x93, count: 32))])
-        XCTAssertEqual(b.hopsResults["no url text"], "fetching…", "a positive record fires the queued text-box fetch")
+        b.dialEndpointForTest = { _ in 1 }
+        b.pendingHops["no-network.invalid"] = "/page"
+        b.applyHnsResults([HnsRecord(domain: "no-network.invalid", address: Data(repeating: 0x93, count: 32))])
+        XCTAssertEqual(b.hopsResults["no-network.invalid"], "fetching…", "a positive record fires the queued text-box fetch")
     }
 
     func testApplyHnsResultsPositiveRecordFiresQueuedWebFetches() {
         let b = makeHeadlessBearer()
         let endpoint = Data(repeating: 0x94, count: 32)
-        b.hopsWebPending["no url multi"] = [("/a", { _ in }), ("/b", { _ in })]
-        b.applyHnsResults([HnsRecord(domain: "no url multi", address: endpoint)])
-        XCTAssertEqual(b.nameByAddr[endpoint], "no url multi", "each queued web fetch dials the resolved endpoint")
+        b.dialEndpointForTest = { _ in 1 }
+        b.hopsWebPending["no-network.invalid"] = [("/a", { _ in }), ("/b", { _ in })]
+        b.applyHnsResults([HnsRecord(domain: "no-network.invalid", address: endpoint)])
+        XCTAssertEqual(b.nameByAddr[endpoint], "no-network.invalid", "each queued web fetch dials the resolved endpoint")
     }
 
     // MARK: reachRecord(fromWellKnown:) - the pure /.well-known/hop body parser (§30)
@@ -124,5 +132,50 @@ final class HeadlessHnsTests: XCTestCase {
         XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("not json".utf8)).isEmpty, "malformed JSON -> empty")
         XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("{\"address\":\"abc\"}".utf8)).isEmpty, "no reach field -> empty")
         XCTAssertTrue(HopBearer.reachRecord(fromWellKnown: Data("{\"reach\":\"!!! not base64 !!!\"}".utf8)).isEmpty, "bad base64 -> empty")
+    }
+
+    func testReachRecordRequiresExactOriginStatusContentTypeAndBounds() {
+        let expected = HopBearer.canonicalReachRecordURL(domain: "bound.example")!
+        let raw = Data([1, 2, 3])
+        let body = Data("{\"reach\":\"\(raw.base64EncodedString())\"}".utf8)
+        func response(_ url: URL = expected, _ status: Int = 200,
+                      _ headers: [String: String] = ["Content-Type": "application/json"]) -> HTTPURLResponse {
+            HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+        }
+
+        XCTAssertEqual(HopBearer.validatedReachRecord(data: body, response: response(), expectedURL: expected), raw)
+        XCTAssertTrue(HopBearer.validatedReachRecord(data: body, response: response(expected, 201), expectedURL: expected).isEmpty)
+        XCTAssertTrue(HopBearer.validatedReachRecord(
+            data: body, response: response(expected, 200, ["Content-Type": "text/plain"]), expectedURL: expected
+        ).isEmpty)
+        XCTAssertTrue(HopBearer.validatedReachRecord(
+            data: Data(repeating: 0, count: HopBearer.hnsMaxBodyBytes + 1),
+            response: response(), expectedURL: expected
+        ).isEmpty)
+        XCTAssertTrue(HopBearer.validatedReachRecord(
+            data: body,
+            response: response(expected, 200, ["Content-Type": "application/json", "X-Large": String(repeating: "x", count: HopBearer.hnsMaxHeaderBytes)]),
+            expectedURL: expected
+        ).isEmpty)
+    }
+
+    func testRedirectResponseFromAnotherOriginCannotBindOriginalDomain() {
+        let expected = HopBearer.canonicalReachRecordURL(domain: "bound.example")!
+        let redirected = URL(string: "https://evil.example/.well-known/hop")!
+        let raw = Data([7, 8, 9])
+        let body = Data("{\"reach\":\"\(raw.base64EncodedString())\"}".utf8)
+        let response = HTTPURLResponse(
+            url: redirected, statusCode: 200, httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        XCTAssertTrue(HopBearer.validatedReachRecord(data: body, response: response, expectedURL: expected).isEmpty)
+    }
+
+    func testCanonicalReachURLRejectsCredentialsPortsAndAmbiguousHosts() {
+        XCTAssertEqual(HopBearer.canonicalReachRecordURL(domain: "EXAMPLE.HOP")?.absoluteString,
+                       "https://example.hop/.well-known/hop")
+        for domain in ["user@host.hop", "host.hop:443", "host.hop.", "host\\evil.hop", "a..hop"] {
+            XCTAssertNil(HopBearer.canonicalReachRecordURL(domain: domain), domain)
+        }
     }
 }

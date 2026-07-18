@@ -29,6 +29,32 @@ final class MirrorPersistenceTests: XCTestCase {
                        "messages/channels/contacts mirror must not use completeFileProtection (denies locked-screen writes)")
     }
 
+    func testHistoryMirrorLivesInAppSupportAndIsExcludedFromBackup() throws {
+        let url = HopBearer.messagesFileURL
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        XCTAssertTrue(url.path.hasPrefix(appSupport.path))
+        let root = url.deletingLastPathComponent()
+        XCTAssertEqual(try root.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
+    func testLegacyDocumentMigrationCommitsBeforeRemovingOldFile() throws {
+        let name = "hop-migration-\(UUID().uuidString).json"
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let old = documents.appendingPathComponent(name)
+        let bytes = Data("legacy".utf8)
+        try bytes.write(to: old, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.removeItem(at: try! HopStorage.applicationSupportURL(fileName: name))
+        }
+
+        let migrated = try HopStorage.applicationSupportURL(fileName: name)
+        XCTAssertEqual(try Data(contentsOf: migrated), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertEqual(try migrated.deletingLastPathComponent()
+            .resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
     // MARK: plaintext-mirror gating: automation.json is never written in a shipped RELEASE build
 
     /// A RELEASE build (isDebug=false) with no HOP_AUTO env must NOT enable the plaintext mirror. This is

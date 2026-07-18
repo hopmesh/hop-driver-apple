@@ -1,70 +1,99 @@
-// Keychain.swift - the device-only secret store behind IdentityStore (sec-priv-02).
-//
-// The Hop identity seed and the SQLCipher db key used to be SHA-256(identifierForVendor): at most
-// ~122 bits of a value that is NOT secret (any on-device code in the app sandbox, a backup, or a
-// forensic pull can read the vendor id and re-derive both). For an untraceable-by-default messenger
-// the long-term Ed25519 identity must be a real random secret that never leaves the device.
-//
-// This keeps a random 32-byte secret per (service, account) in the Keychain with
-// kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly (survives reboot once unlocked, never leaves the
-// device, is excluded from iCloud/iTunes backups by "ThisDeviceOnly"). Where the Secure Enclave is
-// present the stored secret is wrapped by an SE-resident P-256 key so the plaintext secret only
-// exists transiently in memory after an SE-gated unwrap; without the Enclave the secret is stored
-// directly under the same device-only protection.
-//
-// Migration note: the legacy vendor-id-derived value is deterministic and unrecoverable as a random
-// secret, so the FIRST launch after this change generates fresh secrets. That is a ONE-TIME identity
-// reset (new address) and a fresh db key (the old encrypted db, if any, is quarantined by the node's
-// keyed-open path). Every launch after that is stable from the Keychain with no re-derivation.
-
 import Foundation
 import Security
 #if canImport(CryptoKit)
 import CryptoKit
 #endif
 
+public enum HopKeychainError: Error, Equatable {
+    case itemNotFound
+    case status(operation: String, code: OSStatus)
+    case invalidItem
+    case invalidLength(Int)
+    case unwrapFailed
+    case randomFailure(OSStatus)
+    case verificationFailed
+}
+
 public enum HopKeychain {
-    /// Where Keychain items live. One service, distinct accounts per secret.
     static let service = "sh.hop.identity"
     static let identityAccount = "device-seed.v2"
     static let dbKeyAccount = "db-key.v2"
-    /// Account holding the wrapping material (SE public key + salt) when SE wrapping is in use.
 
     public enum Origin: String {
-        case loaded = "keychain-loaded"     // an existing secret was read back
-        case created = "keychain-created"   // a new random secret was generated + stored (one-time)
-        case memory = "in-memory (keychain unavailable)"  // could not use the Keychain; ephemeral
+        case loaded = "keychain-loaded"
+        case created = "keychain-created"
     }
 
-    /// Result of resolving a secret: the 32 bytes plus how they were obtained (for the UI `note`).
     public struct Resolved {
         public let bytes: Data
         public let origin: Origin
     }
 
-    // A process-lifetime fallback so a device with no usable Keychain (e.g. a misconfigured test
-    // host) still gets a STABLE secret for the run rather than a fresh identity per call.
-    private static var memoryFallback: [String: Data] = [:]
-    private static let memoryLock = NSLock()
-
-    /// Get the 32-byte secret for `account`, creating + persisting a fresh random one on first use.
-    public static func secret(account: String) -> Resolved {
-        if let existing = load(account: account) {
-            return Resolved(bytes: existing, origin: .loaded)
-        }
-        let fresh = randomBytes(32)
-        if store(fresh, account: account) {
-            return Resolved(bytes: fresh, origin: .created)
-        }
-        // Keychain write failed (rare: locked device before first unlock, entitlement issue). Use a
-        // process-stable in-memory value so the node stays coherent for this run.
-        memoryLock.lock(); defer { memoryLock.unlock() }
-        if let m = memoryFallback[account] { return Resolved(bytes: m, origin: .memory) }
-        memoryFallback[account] = fresh
-        return Resolved(bytes: fresh, origin: .memory)
+    enum ItemRead {
+        case missing
+        case value(Data)
+        case failure(OSStatus)
     }
 
-    // MARK: - raw Keychain
+    struct Operations {
+        var read: (String) -> ItemRead
+        var add: (String, Data) -> OSStatus
+        var random: (Int) throws -> Data
+        var isWrapped: (Data) -> Bool
+        var wrap: (Data) throws -> Data
+        var unwrap: (Data) throws -> Data
+    }
+
+    /// Only an explicit `errSecItemNotFound` creates. Every other read, decode, unwrap, or length error
+    /// propagates so startup cannot silently replace the user's identity.
+    public static func secret(account: String) throws -> Resolved {
+        try resolve(account: account, operations: productionOperations)
+    }
+
+    static func resolve(account: String, operations: Operations) throws -> Resolved {
+        switch operations.read(account) {
+        case .value(let stored):
+            return Resolved(bytes: try decode(stored, operations: operations), origin: .loaded)
+        case .failure(let status):
+            throw HopKeychainError.status(operation: "SecItemCopyMatching", code: status)
+        case .missing:
+            let fresh = try operations.random(32)
+            guard fresh.count == 32 else { throw HopKeychainError.invalidLength(fresh.count) }
+            let stored = try operations.wrap(fresh)
+            let status = operations.add(account, stored)
+            if status == errSecDuplicateItem {
+                guard case .value(let raced) = operations.read(account) else {
+                    throw HopKeychainError.status(operation: "SecItemAdd duplicate reload", code: status)
+                }
+                return Resolved(bytes: try decode(raced, operations: operations), origin: .loaded)
+            }
+            guard status == errSecSuccess else {
+                throw HopKeychainError.status(operation: "SecItemAdd", code: status)
+            }
+            guard case .value(let committed) = operations.read(account),
+                  try decode(committed, operations: operations) == fresh else {
+                throw HopKeychainError.verificationFailed
+            }
+            return Resolved(bytes: fresh, origin: .created)
+        }
+    }
+
+    private static func decode(_ stored: Data, operations: Operations) throws -> Data {
+        let secret = operations.isWrapped(stored) ? try operations.unwrap(stored) : stored
+        guard secret.count == 32 else { throw HopKeychainError.invalidLength(secret.count) }
+        return secret
+    }
+
+    private static var productionOperations: Operations {
+        Operations(
+            read: readItem,
+            add: addItem,
+            random: randomBytes,
+            isWrapped: SecureEnclaveWrap.isWrapped,
+            wrap: { secret in try SecureEnclaveWrap.wrap(secret) ?? secret },
+            unwrap: SecureEnclaveWrap.unwrap,
+        )
+    }
 
     private static func baseQuery(account: String) -> [String: Any] {
         [
@@ -74,54 +103,40 @@ public enum HopKeychain {
         ]
     }
 
-    private static func load(account: String) -> Data? {
-        var q = baseQuery(account: account)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let stored = out as? Data else { return nil }
-        // Stored form is either the raw 32-byte secret (no SE) or an SE-wrapped blob. Unwrap first;
-        // a 32-byte plaintext round-trips through unwrap unchanged.
-        let secret = SecureEnclaveWrap.unwrap(stored) ?? stored
-        return secret.count == 32 ? secret : nil
+    private static func readItem(account: String) -> ItemRead {
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var output: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &output)
+        if status == errSecItemNotFound { return .missing }
+        guard status == errSecSuccess else { return .failure(status) }
+        guard let data = output as? Data else { return .failure(errSecDecode) }
+        return .value(data)
     }
 
-    @discardableResult
-    private static func store(_ bytes: Data, account: String) -> Bool {
-        // Delete any stale/short item first so an add can't collide.
-        SecItemDelete(baseQuery(account: account) as CFDictionary)
-        var q = baseQuery(account: account)
-        // Where the Secure Enclave is present, persist an SE-wrapped blob so the plaintext secret
-        // exists only transiently in memory after an SE-gated unwrap. Otherwise store it directly
-        // under the same device-only protection (the Keychain's own keys are SE-protected anyway).
-        q[kSecValueData as String] = SecureEnclaveWrap.wrap(bytes) ?? bytes
-        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    private static func addItem(account: String, data: Data) -> OSStatus {
+        var query = baseQuery(account: account)
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        query[kSecAttrSynchronizable as String] = false
+        return SecItemAdd(query as CFDictionary, nil)
     }
 
-    /// 32 CSPRNG bytes (SecRandom, falling back to arc4random only if that ever fails).
-    static func randomBytes(_ n: Int) -> Data {
-        var d = Data(count: n)
-        let rc = d.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, n, $0.baseAddress!) }
-        if rc != errSecSuccess {
-            d = Data((0..<n).map { _ in UInt8.random(in: .min ... .max) })
+    static func randomBytes(_ count: Int) throws -> Data {
+        var data = Data(count: count)
+        let status = data.withUnsafeMutableBytes {
+            SecRandomCopyBytes(kSecRandomDefault, count, $0.baseAddress!)
         }
-        return d
+        guard status == errSecSuccess else { throw HopKeychainError.randomFailure(status) }
+        return data
     }
 }
 
-/// Secure-Enclave wrapping for the stored secret (sec-priv-02). When the Enclave is present the
-/// secret is sealed under an SE-resident P-256 key so its plaintext lives only briefly in memory
-/// after an SE-gated unwrap. The SE key's own (opaque, non-exportable) representation is itself kept
-/// in the Keychain. On hardware WITHOUT an Enclave (older sim/macOS), wrap/unwrap are no-ops and the
-/// secret is stored directly under the Keychain's device-only protection.
 enum SecureEnclaveWrap {
-    private static let magic = Data("HOPSE1".utf8)   // marks an SE-wrapped blob
-    private static let seKeyService = HopKeychain.service
-    private static let seKeyAccount = "se-wrap-key.v2"
+    private static let magic = Data("HOPSE1".utf8)
+    private static let keyAccount = "se-wrap-key.v2"
 
-    /// True on devices with a usable Secure Enclave.
     static var available: Bool {
         #if canImport(CryptoKit)
         return SecureEnclave.isAvailable
@@ -130,85 +145,126 @@ enum SecureEnclaveWrap {
         #endif
     }
 
-    /// Wrap `secret` under the SE key (creating the SE key once). Returns nil (caller stores plaintext)
-    /// when the Enclave is unavailable or any step fails.
-    static func wrap(_ secret: Data) -> Data? {
+    static func isWrapped(_ blob: Data) -> Bool {
+        blob.count > magic.count + 1 && blob.prefix(magic.count) == magic
+    }
+
+    /// Nil means the platform has no Secure Enclave. A present Enclave failing to wrap is an error.
+    static func wrap(_ secret: Data) throws -> Data? {
         #if canImport(CryptoKit)
-        guard available, let sePriv = loadOrCreateSEKey() else { return nil }
+        guard available else { return nil }
         do {
-            let eph = P256.KeyAgreement.PrivateKey()
-            let shared = try eph.sharedSecretFromKeyAgreement(with: sePriv.publicKey)
-            let symKey = shared.hkdfDerivedSymmetricKey(
-                using: SHA256.self, salt: Data("hop.se.wrap".utf8), sharedInfo: Data(), outputByteCount: 32)
-            let sealed = try AES.GCM.seal(secret, using: symKey)
-            guard let combined = sealed.combined else { return nil }
-            let ephPub = eph.publicKey.x963Representation
-            var out = magic
-            out.append(UInt8(ephPub.count))     // ephemeral pubkey length (x9.63 P-256 = 65)
-            out.append(ephPub)
-            out.append(combined)                // GCM nonce+ciphertext+tag
-            return out
+            let secureKey = try loadOrCreateKey()
+            let ephemeral = P256.KeyAgreement.PrivateKey()
+            let shared = try ephemeral.sharedSecretFromKeyAgreement(with: secureKey.publicKey)
+            let symmetric = shared.hkdfDerivedSymmetricKey(
+                using: SHA256.self,
+                salt: Data("hop.se.wrap".utf8),
+                sharedInfo: Data(),
+                outputByteCount: 32
+            )
+            let sealed = try AES.GCM.seal(secret, using: symmetric)
+            guard let combined = sealed.combined else { throw HopKeychainError.unwrapFailed }
+            let publicKey = ephemeral.publicKey.x963Representation
+            guard publicKey.count <= Int(UInt8.max) else { throw HopKeychainError.invalidItem }
+            var output = magic
+            output.append(UInt8(publicKey.count))
+            output.append(publicKey)
+            output.append(combined)
+            return output
+        } catch let error as HopKeychainError {
+            throw error
         } catch {
-            return nil
+            throw HopKeychainError.unwrapFailed
         }
         #else
         return nil
         #endif
     }
 
-    /// Reverse of `wrap`. Returns nil when `blob` is not an SE-wrapped blob (caller treats it as raw).
-    static func unwrap(_ blob: Data) -> Data? {
+    static func unwrap(_ blob: Data) throws -> Data {
         #if canImport(CryptoKit)
-        guard blob.count > magic.count + 1, blob.prefix(magic.count) == magic,
-              let sePriv = loadOrCreateSEKey(createIfMissing: false) else { return nil }
-        var i = blob.index(blob.startIndex, offsetBy: magic.count)
-        let ephLen = Int(blob[i]); i = blob.index(after: i)
-        guard blob.distance(from: i, to: blob.endIndex) > ephLen else { return nil }
-        let ephEnd = blob.index(i, offsetBy: ephLen)
-        let ephPub = Data(blob[i..<ephEnd])
-        let sealed = Data(blob[ephEnd...])
+        guard isWrapped(blob) else { throw HopKeychainError.invalidItem }
         do {
-            let ephKey = try P256.KeyAgreement.PublicKey(x963Representation: ephPub)
-            let shared = try sePriv.sharedSecretFromKeyAgreement(with: ephKey)
-            let symKey = shared.hkdfDerivedSymmetricKey(
-                using: SHA256.self, salt: Data("hop.se.wrap".utf8), sharedInfo: Data(), outputByteCount: 32)
-            let box = try AES.GCM.SealedBox(combined: sealed)
-            return try AES.GCM.open(box, using: symKey)
+            let secureKey = try loadKey()
+            var index = blob.index(blob.startIndex, offsetBy: magic.count)
+            let publicLength = Int(blob[index])
+            index = blob.index(after: index)
+            guard blob.distance(from: index, to: blob.endIndex) > publicLength else {
+                throw HopKeychainError.invalidItem
+            }
+            let publicEnd = blob.index(index, offsetBy: publicLength)
+            let ephemeral = try P256.KeyAgreement.PublicKey(x963Representation: Data(blob[index..<publicEnd]))
+            let shared = try secureKey.sharedSecretFromKeyAgreement(with: ephemeral)
+            let symmetric = shared.hkdfDerivedSymmetricKey(
+                using: SHA256.self,
+                salt: Data("hop.se.wrap".utf8),
+                sharedInfo: Data(),
+                outputByteCount: 32
+            )
+            let box = try AES.GCM.SealedBox(combined: Data(blob[publicEnd...]))
+            return try AES.GCM.open(box, using: symmetric)
+        } catch let error as HopKeychainError {
+            throw error
         } catch {
-            return nil
+            throw HopKeychainError.unwrapFailed
         }
         #else
-        return nil
+        throw HopKeychainError.unwrapFailed
         #endif
     }
 
     #if canImport(CryptoKit)
-    /// The SE-resident P-256 key agreement key, persisted (as its opaque SE representation) in the
-    /// Keychain so it survives launches. Created once.
-    private static func loadOrCreateSEKey(createIfMissing: Bool = true) -> SecureEnclave.P256.KeyAgreement.PrivateKey? {
-        let q: [String: Any] = [
+    private static func keyQuery(returnData: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: seKeyService,
-            kSecAttrAccount as String: seKeyAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecAttrService as String: HopKeychain.service,
+            kSecAttrAccount as String: keyAccount,
         ]
-        var out: CFTypeRef?
-        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let rep = out as? Data {
-            return try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: rep)
+        if returnData {
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
         }
-        guard createIfMissing, let key = try? SecureEnclave.P256.KeyAgreement.PrivateKey() else { return nil }
-        var add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: seKeyService,
-            kSecAttrAccount as String: seKeyAccount,
-            kSecValueData as String: key.dataRepresentation,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-        SecItemDelete(add as CFDictionary)
-        add[kSecValueData as String] = key.dataRepresentation
-        _ = SecItemAdd(add as CFDictionary, nil)
-        return key
+        return query
+    }
+
+    private static func loadKey() throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
+        var output: CFTypeRef?
+        let status = SecItemCopyMatching(keyQuery(returnData: true) as CFDictionary, &output)
+        if status == errSecItemNotFound { throw HopKeychainError.itemNotFound }
+        guard status == errSecSuccess else {
+            throw HopKeychainError.status(operation: "SecItemCopyMatching SE key", code: status)
+        }
+        guard let representation = output as? Data else { throw HopKeychainError.invalidItem }
+        do {
+            return try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: representation)
+        } catch {
+            throw HopKeychainError.unwrapFailed
+        }
+    }
+
+    private static func loadOrCreateKey() throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
+        do {
+            return try loadKey()
+        } catch HopKeychainError.itemNotFound {
+            let key: SecureEnclave.P256.KeyAgreement.PrivateKey
+            do { key = try SecureEnclave.P256.KeyAgreement.PrivateKey() }
+            catch { throw HopKeychainError.unwrapFailed }
+            var add = keyQuery(returnData: false)
+            add[kSecValueData as String] = key.dataRepresentation
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            add[kSecAttrSynchronizable as String] = false
+            let status = SecItemAdd(add as CFDictionary, nil)
+            if status == errSecDuplicateItem { return try loadKey() }
+            guard status == errSecSuccess else {
+                throw HopKeychainError.status(operation: "SecItemAdd SE key", code: status)
+            }
+            let committed = try loadKey()
+            guard committed.dataRepresentation == key.dataRepresentation else {
+                throw HopKeychainError.verificationFailed
+            }
+            return committed
+        }
     }
     #endif
 }
